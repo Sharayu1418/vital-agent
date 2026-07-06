@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     api_auth_token: str | None = None
     # /debug/* routes exist only when true. NEVER true on a public deploy.
     debug_endpoints: bool = False
+    # Session cookie Secure flag. Default TRUE (fail-safe for prod, where
+    # Cloud Run terminates TLS); local dev over http sets false in .env.
+    session_cookie_secure: bool = True
 
 
 @lru_cache
