@@ -8,12 +8,16 @@ from vital.config import settings
 
 
 @tool
-def log_sleep(bedtime: str, wake_time: str, quality: int, duration_min: int) -> str:
-    """Record last night's sleep. bedtime/wake_time as 'HH:MM' (24h),
-    quality 1 (awful) to 5 (great), duration_min = total minutes slept.
-    Compute duration_min yourself from the times the user gives you."""
-    storage.log_sleep(bedtime, wake_time, quality, duration_min)
-    return "logged"
+def log_sleep(bedtime: str, wake_time: str, quality: int) -> str:
+    """Record last night's sleep. bedtime/wake_time as 'HH:MM' 24h format
+    (e.g. '23:30', '07:00'), quality 1 (awful) to 5 (great).
+    Duration is computed automatically — do NOT calculate it yourself.
+    If this returns an 'invalid' message, ask the user to clarify the times."""
+    try:
+        duration = storage.log_sleep(bedtime, wake_time, quality)
+        return f"logged: {duration} minutes"
+    except ValueError as exc:
+        return f"invalid: {exc}"
 
 
 @tool

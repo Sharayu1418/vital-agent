@@ -7,3 +7,5 @@ __pycache__/
 uv.lock
 
 .DS_Store
+
+docs/vital-review-teachings.md

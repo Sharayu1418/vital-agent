@@ -28,6 +28,8 @@ Format each recommendation as:
 Rules:
 - Real venues with links, never generic advice like 'try a new hobby'.
 - Respect budget signals ('broke', 'cheap' → free/low-cost options).
+- If a tool returns an 'error' key: tell the user live data is unavailable, \
+then give best-effort suggestions clearly marked as unverified. Never pretend.
 - Keep the whole reply under 200 words. No filler.
 """
 

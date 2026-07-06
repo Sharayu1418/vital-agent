@@ -54,9 +54,13 @@ curl -N localhost:8000/chat -H 'content-type: application/json' \
 printf '%s' "$OPENWEATHER_API_KEY" | gcloud secrets create openweather --data-file=-
 printf '%s' "$GOOGLE_PLACES_API_KEY" | gcloud secrets create places --data-file=-
 
+# API auth token — callers without it are pinned to 'local-user',
+# and /debug/* routes don't exist in prod (DEBUG_ENDPOINTS defaults false)
+openssl rand -hex 32 | tr -d '\n' | gcloud secrets create vital-api-token --data-file=-
+
 gcloud run deploy vital --source . --region us-east1 --allow-unauthenticated \
   --set-env-vars GOOGLE_CLOUD_PROJECT=vital-agent-dev \
-  --set-secrets OPENWEATHER_API_KEY=openweather:latest,GOOGLE_PLACES_API_KEY=places:latest
+  --set-secrets OPENWEATHER_API_KEY=openweather:latest,GOOGLE_PLACES_API_KEY=places:latest,API_AUTH_TOKEN=vital-api-token:latest
 
 # Vertex access for the service identity (no JSON keys, ever)
 gcloud projects add-iam-policy-binding vital-agent-dev \

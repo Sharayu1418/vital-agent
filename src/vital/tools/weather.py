@@ -2,6 +2,9 @@
 
 The agent sees OUR schema. OpenWeather is an implementation detail:
 swap providers or add caching here without touching prompts.
+
+Failure policy: external APIs must never crash the agent loop — on any
+provider error we return {"error": ...} so the model can degrade gracefully.
 """
 import httpx
 from langchain_core.tools import tool
@@ -27,27 +30,33 @@ def get_weather(city: str) -> dict:
 
     ALWAYS call this before recommending any outdoor activity.
     `outdoor_friendly` is a pre-computed hint: false means prefer indoor options.
+    If the result contains an 'error' key, live weather is unavailable — tell
+    the user so, and prefer weather-safe (indoor) recommendations.
     """
     cfg = settings()
-    with httpx.Client(timeout=cfg.tool_timeout_seconds) as client:
-        now = client.get(
-            f"{_BASE}/weather",
-            params={"q": city, "appid": cfg.openweather_api_key, "units": "metric"},
-        ).raise_for_status().json()
+    try:
+        with httpx.Client(timeout=cfg.tool_timeout_seconds) as client:
+            now = client.get(
+                f"{_BASE}/weather",
+                params={"q": city, "appid": cfg.openweather_api_key, "units": "metric"},
+            ).raise_for_status().json()
 
-        forecast = client.get(
-            f"{_BASE}/forecast",
-            params={"q": city, "appid": cfg.openweather_api_key, "units": "metric", "cnt": 4},
-        ).raise_for_status().json()
+            forecast = client.get(
+                f"{_BASE}/forecast",
+                params={"q": city, "appid": cfg.openweather_api_key, "units": "metric", "cnt": 4},
+            ).raise_for_status().json()
 
-    precip = max((slot.get("pop", 0.0) for slot in forecast.get("list", [])), default=0.0)
-    temp = now["main"]["temp"]
-    report = WeatherReport(
-        city=city,
-        temp_c=temp,
-        feels_like_c=now["main"]["feels_like"],
-        condition=now["weather"][0]["description"],
-        precip_prob_next_12h=precip,
-        outdoor_friendly=(precip < 0.4 and -5 <= temp <= 35),
-    )
-    return report.model_dump()
+        precip = max((slot.get("pop", 0.0) for slot in forecast.get("list", [])), default=0.0)
+        temp = now["main"]["temp"]
+        report = WeatherReport(
+            city=city,
+            temp_c=temp,
+            feels_like_c=now["main"]["feels_like"],
+            condition=now["weather"][0]["description"],
+            precip_prob_next_12h=precip,
+            outdoor_friendly=(precip < 0.4 and -5 <= temp <= 35),
+        )
+        return report.model_dump()
+    except (httpx.HTTPError, KeyError, IndexError, ValueError) as exc:
+        # Log server-side; give the model a clean, non-crashing signal
+        return {"error": f"live weather unavailable ({type(exc).__name__})", "city": city}

@@ -36,13 +36,33 @@ def _conn() -> sqlite3.Connection:
     return conn
 
 
-def log_sleep(bedtime: str, wake_time: str, quality: int, duration_min: int) -> None:
+def compute_duration_min(bedtime: str, wake_time: str) -> int:
+    """Duration from 'HH:MM' strings, handling the cross-midnight case.
+    Computed HERE, not by the LLM — models are unreliable at time arithmetic."""
+    from datetime import datetime, timedelta
+    bed = datetime.strptime(bedtime, "%H:%M")
+    wake = datetime.strptime(wake_time, "%H:%M")
+    if wake <= bed:
+        wake += timedelta(days=1)
+    return int((wake - bed).total_seconds() // 60)
+
+
+def log_sleep(bedtime: str, wake_time: str, quality: int) -> int:
+    """Validates and stores; returns computed duration_min.
+    Raises ValueError on impossible input — the tool layer turns that into
+    a message the model can use to re-ask the user."""
+    if not 1 <= quality <= 5:
+        raise ValueError(f"quality must be 1-5, got {quality}")
+    duration_min = compute_duration_min(bedtime, wake_time)  # raises on bad HH:MM
+    if not 30 <= duration_min <= 18 * 60:
+        raise ValueError(f"implausible sleep duration: {duration_min} min")
     with _conn() as c:
         c.execute(
             "INSERT OR REPLACE INTO sleep_logs VALUES (?, ?, ?, ?, ?, ?)",
             (current_user_id.get(), date.today().isoformat(), bedtime, wake_time,
              duration_min, quality),
         )
+    return duration_min
 
 
 def sleep_history(days: int) -> list[dict]:

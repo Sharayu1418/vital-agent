@@ -23,6 +23,14 @@ class Settings(BaseSettings):
     sqlite_path: str = "vital.db"
     database_url: str | None = None
 
+    # --- Security (safe-by-default: both OFF unless explicitly set) ---
+    # Shared bearer token for trusted callers (your frontend's backend).
+    # Only token-authenticated callers may assert a user_id; everyone else
+    # is pinned to 'local-user'. Replaced by real per-user auth in Phase 5.
+    api_auth_token: str | None = None
+    # /debug/* routes exist only when true. NEVER true on a public deploy.
+    debug_endpoints: bool = False
+
 
 @lru_cache
 def settings() -> Settings:
