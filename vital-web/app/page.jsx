@@ -8,6 +8,10 @@
  */
 import { useEffect, useRef, useState } from "react";
 
+import {
+  applyEvent, initialStream, shouldKeepBubble, sseEvents,
+} from "./lib/stream";
+
 const API = process.env.NEXT_PUBLIC_API_BASE;
 
 const STARTERS = [
@@ -16,28 +20,6 @@ const STARTERS = [
   "I want a hobby but have no idea what",
   "Find me people who are into bouldering",
 ];
-
-async function* sseEvents(response) {
-  // fetch()-based SSE parser (EventSource can't POST or send cookies+body)
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    const frames = buf.split(/\r?\n\r?\n/);
-    buf = frames.pop() ?? "";
-    for (const frame of frames) {
-      let event = "message", data = [];
-      for (const line of frame.split(/\r?\n/)) {
-        if (line.startsWith("event:")) event = line.slice(6).trim();
-        else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
-      }
-      yield { event, data: data.join("\n") };
-    }
-  }
-}
 
 export default function Home() {
   const [messages, setMessages] = useState([]); // {role, text, status?}
@@ -54,23 +36,24 @@ export default function Home() {
   }, [messages, pendingPlan]);
 
   async function consume(response) {
-    let aiText = "";
-    setMessages((m) => [...m, { role: "ai", text: "" }]);
-    for await (const { event, data } of sseEvents(response)) {
-      if (event === "token") {
-        aiText += data;
-        setMessages((m) => [...m.slice(0, -1), { role: "ai", text: aiText }]);
-      } else if (event === "message") {
-        aiText = data;
-        setMessages((m) => [...m.slice(0, -1), { role: "ai", text: aiText }]);
-      } else if (event === "status") {
-        setMessages((m) => [...m.slice(0, -1),
-          { role: "ai", text: aiText, status: data }]);
-      } else if (event === "approval_required") {
-        setPendingPlan(JSON.parse(data).plan);
-      }
+    // Stable-id updates: never touch "the last message" — a late event
+    // after other state changes must not clobber or delete streamed text.
+    const id = crypto.randomUUID();
+    let st = initialStream();
+    setMessages((m) => [...m, { id, role: "ai", text: "" }]);
+    const sync = () => setMessages((m) => m.map((msg) =>
+      msg.id === id ? { ...msg, text: st.text, status: st.status } : msg));
+
+    for await (const ev of sseEvents(response)) {
+      st = applyEvent(st, ev);
+      if (ev.event === "approval_required") setPendingPlan(st.plan);
+      sync();
     }
-    if (!aiText) setMessages((m) => (m[m.length - 1]?.text === "" ? m.slice(0, -1) : m));
+    st = { ...st, status: null };
+    sync(); // clear any lingering "using tool…" line
+    if (!shouldKeepBubble(st) && !st.approval) {
+      setMessages((m) => m.filter((msg) => msg.id !== id));
+    }
   }
 
   async function send(text) {
@@ -191,8 +174,8 @@ export default function Home() {
         </>
       )}
 
-      {messages.map((m, i) => (
-        <div className={`msg ${m.role}`} key={i}>
+      {messages.map((m, i) => (m.role === "ai" && !m.text && !m.status) ? null : (
+        <div className={`msg ${m.role}`} key={m.id ?? i}>
           <div className="bubble">
             {m.text}
             {m.status && <span className="status-line">{m.status}…</span>}

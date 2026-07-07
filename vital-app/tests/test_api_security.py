@@ -296,6 +296,28 @@ def test_csrf_guard_inactive_under_samesite_lax(monkeypatch):
     assert r.status_code == 200
 
 
+def test_mobile_header_session_roundtrip(monkeypatch):
+    # RN app can't use httponly cookies: session arrives in the
+    # X-Vital-Session response header, comes back as a request header
+    client, fake = _client(monkeypatch)
+    first = client.post("/chat", json={"message": "hi"})
+    session = first.headers["x-vital-session"]
+    assert len(session) == 32
+    client.cookies.clear()  # simulate a cookie-less mobile client
+    client.post("/chat", json={"message": "again"},
+                headers={"X-Vital-Session": session})
+    assert fake.seen[0] == fake.seen[1]  # same identity via header alone
+
+
+def test_forged_mobile_header_gets_fresh_session(monkeypatch):
+    client, fake = _client(monkeypatch)
+    client.cookies.clear()
+    r = client.post("/chat", json={"message": "hi"},
+                    headers={"X-Vital-Session": "../local-user"})
+    assert r.status_code == 200
+    assert "local-user" not in fake.seen[0]  # invalid format → new anon session
+
+
 def test_session_cookie_is_secure_by_default(monkeypatch):
     # Simulate prod: no SESSION_COOKIE_SECURE override → Secure flag present
     monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")

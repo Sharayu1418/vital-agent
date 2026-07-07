@@ -11,7 +11,8 @@ Identity model (interim until real auth in Phase 5) — see security.py:
 """
 from contextlib import asynccontextmanager
 
-from fastapi import Cookie, Depends, FastAPI, HTTPException, Response, UploadFile
+from fastapi import (Cookie, Depends, FastAPI, Header, HTTPException, Response,
+                     UploadFile)
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
@@ -45,7 +46,8 @@ app.add_middleware(
     allow_origins=[settings().frontend_origin],
     allow_credentials=True,
     allow_methods=["GET", "POST", "DELETE"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["Authorization", "Content-Type", "X-Vital-Session"],
+    expose_headers=["X-Vital-Session"],
 )
 
 
@@ -67,13 +69,18 @@ async def csrf_origin_guard(request, call_next):
 
 def _set_session(response: Response, new_session: str | None) -> None:
     """Every route that resolves identity MUST call this — otherwise a new
-    anonymous user's data lands under an ID their browser never receives."""
+    anonymous user's data lands under an ID their browser never receives.
+
+    Dual transport: httponly cookie for browsers, X-Vital-Session response
+    header for the mobile app (RN networking doesn't do httponly cookies;
+    the app stores the value and sends it back as a request header)."""
     if new_session:
         cfg = settings()
         response.set_cookie(SESSION_COOKIE, new_session, httponly=True,
                             secure=cfg.session_cookie_secure,
                             samesite=cfg.session_cookie_samesite,
                             max_age=30 * 24 * 3600)
+        response.headers["X-Vital-Session"] = new_session
 
 
 class ChatRequest(BaseModel):
@@ -90,6 +97,26 @@ async def healthz() -> dict:
 # nodes whose model output is machinery (routing decisions, plan JSON,
 # fact extraction) — never stream their raw tokens to the user
 _NON_USER_FACING = {"supervisor", "planner", "memory_writer"}
+
+
+def visible_text(content) -> str:
+    """Extract ONLY user-visible text from LangChain/Gemini message content.
+
+    Vertex/Gemini chunk content is sometimes a list of content blocks
+    (dicts with 'text' plus provider internals like 'thought_signature').
+    Streaming the raw object leaks provider metadata to the UI — so this
+    is a security/privacy boundary, not just formatting."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        text = content.get("text")
+        return text if isinstance(text, str) else ""
+    if isinstance(content, list):
+        return "".join(visible_text(part) for part in content)
+    text = getattr(content, "text", None)
+    return text if isinstance(text, str) else ""
 
 
 def _graph_stream(graph_input, config, user_id: str):
@@ -113,7 +140,7 @@ def _graph_stream(graph_input, config, user_id: str):
             kind = event["event"]
             node = event.get("metadata", {}).get("langgraph_node", "")
             if kind == "on_chat_model_stream" and node not in _NON_USER_FACING:
-                chunk = event["data"]["chunk"].content
+                chunk = visible_text(event["data"]["chunk"].content)
                 if chunk:
                     streamed_tokens = True
                     streamed_chars += len(chunk)
@@ -132,9 +159,10 @@ def _graph_stream(graph_input, config, user_id: str):
             # state — surface it, or the frontend shows nothing after approve
             messages = (getattr(snap, "values", None) or {}).get("messages", [])
             last = messages[-1] if messages else None
-            if last is not None and getattr(last, "type", "") == "ai" \
-                    and getattr(last, "content", ""):
-                yield {"event": "message", "data": last.content}
+            if last is not None and getattr(last, "type", "") == "ai":
+                msg = visible_text(getattr(last, "content", None))
+                if msg:
+                    yield {"event": "message", "data": msg}
 
         # Phase 4: usage + metrics. user_id comes from the CALLER's resolved
         # identity, never from graph state — state can lag or be absent on a
@@ -159,8 +187,10 @@ async def chat(
     req: ChatRequest,
     trusted: bool = Depends(caller_is_trusted),
     vital_session: str | None = Cookie(default=None),
+    x_vital_session: str | None = Header(default=None),
 ) -> EventSourceResponse:
-    user_id, new_session = resolve_identity(req.user_id, trusted, vital_session)
+    user_id, new_session = resolve_identity(req.user_id, trusted,
+                                            vital_session or x_vital_session)
     current_user_id.set(user_id)  # tools read identity from here, never from the LLM
 
     # Guardrail 1: crisis messages bypass the agent pipeline entirely —
@@ -198,12 +228,14 @@ async def approve(
     req: ApprovalRequest,
     trusted: bool = Depends(caller_is_trusted),
     vital_session: str | None = Cookie(default=None),
+    x_vital_session: str | None = Header(default=None),
 ) -> EventSourceResponse:
     """Resume a paused plan-approval interrupt. The resume value reaches
     request_approval() exactly where interrupt() returned."""
     from langgraph.types import Command as ResumeCommand
 
-    user_id, new_session = resolve_identity(req.user_id, trusted, vital_session)
+    user_id, new_session = resolve_identity(req.user_id, trusted,
+                                            vital_session or x_vital_session)
     current_user_id.set(user_id)
     # budget applies here too: an 'edit' resume re-invokes the planner LLM,
     # so /approve must not be a budget bypass (Phase 4 review finding)
@@ -219,14 +251,15 @@ async def approve(
 
 
 class Identity:
-    """Dependency bundle: resolved user_id + session cookie to set (if new)."""
+    """Dependency bundle: resolved user_id + session (cookie OR mobile header)."""
     def __init__(self, trusted: bool = Depends(caller_is_trusted),
-                 vital_session: str | None = Cookie(default=None)):
+                 vital_session: str | None = Cookie(default=None),
+                 x_vital_session: str | None = Header(default=None)):
         self.trusted = trusted
-        self.session_cookie = vital_session
+        self.session = vital_session or x_vital_session
 
     def resolve(self, req_user_id: str = "local-user") -> tuple[str, str | None]:
-        return resolve_identity(req_user_id, self.trusted, self.session_cookie)
+        return resolve_identity(req_user_id, self.trusted, self.session)
 
 
 @app.post("/upload/health")
