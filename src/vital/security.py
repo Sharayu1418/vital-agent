@@ -66,8 +66,16 @@ def resolve_identity(req_user_id: str, trusted: bool,
 
 def validate_startup() -> None:
     """Fail-closed boot checks. Called from the app lifespan."""
-    if settings().debug_endpoints and configured_token() is None:
+    cfg = settings()
+    if cfg.debug_endpoints and configured_token() is None:
         raise RuntimeError(
             "Refusing to start: DEBUG_ENDPOINTS=true requires a non-empty "
             "API_AUTH_TOKEN (debug routes must never be unauthenticated)."
         )
+    if cfg.session_cookie_samesite not in ("lax", "none", "strict"):
+        raise RuntimeError("SESSION_COOKIE_SAMESITE must be lax, none, or strict")
+    if cfg.session_cookie_samesite == "none" and not cfg.session_cookie_secure:
+        raise RuntimeError(
+            "Refusing to start: SameSite=None cookies MUST be Secure — "
+            "browsers reject them otherwise, and plaintext cross-site "
+            "cookies would be wrong anyway.")

@@ -38,6 +38,9 @@ CREATE TABLE IF NOT EXISTS calendar_events (
 CREATE TABLE IF NOT EXISTS token_usage (
     user_id TEXT, day TEXT, tokens INTEGER, PRIMARY KEY (user_id, day)
 );
+CREATE TABLE IF NOT EXISTS feedback (
+    user_id TEXT, thread_id TEXT, ts TEXT, rating TEXT, comment TEXT
+);
 """
 
 
@@ -122,6 +125,21 @@ def sandbox_audit(limit: int = 50) -> list[dict]:
             "SELECT ts, ok, error, code FROM sandbox_runs WHERE user_id = ? "
             "ORDER BY ts DESC LIMIT ?", (current_user_id.get(), limit)).fetchall()
     return [dict(r) for r in rows]
+
+
+def save_feedback(user_id: str, thread_id: str, rating: str, comment: str) -> None:
+    from datetime import datetime
+    with _conn() as c:
+        c.execute("INSERT INTO feedback VALUES (?, ?, ?, ?, ?)",
+                  (user_id, thread_id, datetime.utcnow().isoformat(), rating, comment))
+
+
+def feedback_summary() -> dict:
+    """Phase 5 iteration loop: thumbs by day. (Per-user data stays private.)"""
+    with _conn() as c:
+        rows = c.execute("""SELECT substr(ts, 1, 10) AS day, rating, COUNT(*) AS n
+                            FROM feedback GROUP BY day, rating ORDER BY day DESC""").fetchall()
+    return {"by_day": [dict(r) for r in rows]}
 
 
 def add_tokens(user_id: str, tokens: int) -> None:

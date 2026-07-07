@@ -1,6 +1,6 @@
-# VITAL — Phases 0–1: Supervisor + 3 Agents
+# VITAL — multi-agent life copilot (Phases 0–5 complete)
 
-LangGraph supervisor routing between Activity Scout, Sleep & Energy, and Idea Generator agents on Vertex AI Gemini; streamed via FastAPI; deployed on Cloud Run. Architecture rationale: see `../01-design-decisions.md`.
+LangGraph supervisor routing between 5 agents (Activity Scout, Sleep & Energy, Idea Generator, People Connector, Planner) on Vertex AI Gemini. E2B-sandboxed analysis of uploaded health data, long-term memory, human-in-the-loop calendar approval, crisis/budget guardrails, CI + nightly evals. Frontend: `../vital-web`. Architecture rationale: `../01-design-decisions.md`. Honest gaps: `LIMITATIONS.md`. Accounts/keys needed: `docs/accounts-and-keys.md`.
 
 ## Layout
 

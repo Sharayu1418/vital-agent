@@ -15,7 +15,7 @@ from fastapi import Cookie, Depends, FastAPI, HTTPException, Response, UploadFil
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from vital import guardrails, ingest, memory, metrics
+from vital import guardrails, ingest, memory, metrics, storage
 from vital.config import settings
 from vital.graph import build_graph
 from vital.security import (SESSION_COOKIE, caller_is_trusted,
@@ -33,16 +33,47 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="VITAL", version="0.2.2", lifespan=lifespan)
+app = FastAPI(title="VITAL", version="0.5.0", lifespan=lifespan)
+
+# Phase 5: the Next.js frontend is a separate origin. Cookies carry identity,
+# so allow_credentials=True and a SINGLE explicit origin (never "*" with
+# credentials — browsers reject it, and it would be wrong anyway).
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[settings().frontend_origin],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
+)
+
+
+@app.middleware("http")
+async def csrf_origin_guard(request, call_next):
+    """CSRF defense that activates exactly when it's needed: SameSite=None
+    means foreign sites can send our cookie on POSTs. Browsers always attach
+    an Origin header to cross-site fetches — reject mismatches. Requests
+    without Origin (curl, server-to-server) pass; they carry no cookie jar."""
+    cfg = settings()
+    if cfg.session_cookie_samesite == "none" and request.method in {"POST", "DELETE"}:
+        origin = request.headers.get("origin")
+        if origin is not None and origin != cfg.frontend_origin:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=403,
+                                content={"detail": "cross-site request blocked"})
+    return await call_next(request)
 
 
 def _set_session(response: Response, new_session: str | None) -> None:
     """Every route that resolves identity MUST call this — otherwise a new
     anonymous user's data lands under an ID their browser never receives."""
     if new_session:
+        cfg = settings()
         response.set_cookie(SESSION_COOKIE, new_session, httponly=True,
-                            secure=settings().session_cookie_secure,
-                            samesite="lax", max_age=30 * 24 * 3600)
+                            secure=cfg.session_cookie_secure,
+                            samesite=cfg.session_cookie_samesite,
+                            max_age=30 * 24 * 3600)
 
 
 class ChatRequest(BaseModel):
@@ -218,6 +249,24 @@ async def upload_health(file: UploadFile, response: Response,
     ingest.save_sleep_data(user_id, rows)
     return {"nights_imported": len(rows),
             "date_range": [rows[0]["date"], rows[-1]["date"]]}
+
+
+class FeedbackRequest(BaseModel):
+    thread_id: str = Field(default="demo", max_length=64, pattern=r"^[\w-]+$")
+    rating: str = Field(pattern=r"^(up|down)$")
+    comment: str = Field(default="", max_length=2000)
+
+
+@app.post("/feedback")
+async def feedback(req: FeedbackRequest, response: Response,
+                   ident: Identity = Depends()) -> dict:
+    """Thumbs per response — the Phase 5 iteration loop. Also mirrored to
+    metrics so rating trends show up next to latency/cost."""
+    user_id, new_session = ident.resolve()
+    _set_session(response, new_session)
+    storage.save_feedback(user_id, req.thread_id, req.rating, req.comment)
+    metrics.log_turn(user_id, req.thread_id, 0, 0, 0, kind=f"feedback_{req.rating}")
+    return {"recorded": req.rating}
 
 
 @app.get("/memories")

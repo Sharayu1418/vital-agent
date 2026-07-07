@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     # Session cookie Secure flag. Default TRUE (fail-safe for prod, where
     # Cloud Run terminates TLS); local dev over http sets false in .env.
     session_cookie_secure: bool = True
+    # 'lax' works same-site (localhost dev; app./api. subdomains in prod).
+    # Vercel <-> Cloud Run on different sites needs 'none' — which activates
+    # the origin-check CSRF guard and REQUIRES secure=true (startup-enforced).
+    session_cookie_samesite: str = "lax"  # lax | none | strict
 
     # --- Phase 2: sandbox + memory ---
     e2b_api_key: str | None = None       # from e2b.dev; free tier for dev
@@ -47,6 +51,9 @@ class Settings(BaseSettings):
     # --- Phase 4: guardrails ---
     daily_token_budget: int = 50_000   # per user; ~$0.05/day at Flash prices
     recursion_limit: int = 25          # hard cap on graph steps per turn
+
+    # --- Phase 5: frontend origin for CORS (Vercel URL in prod) ---
+    frontend_origin: str = "http://localhost:3000"
 
 
 @lru_cache

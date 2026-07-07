@@ -249,6 +249,53 @@ def test_approve_without_pending_interrupt_is_409(monkeypatch):
     assert r.status_code == 409
 
 
+def test_samesite_none_requires_secure_at_startup(monkeypatch):
+    monkeypatch.setenv("SESSION_COOKIE_SAMESITE", "none")
+    monkeypatch.setenv("SESSION_COOKIE_SECURE", "false")
+    settings.cache_clear()
+    with pytest.raises(RuntimeError):
+        security.validate_startup()
+
+
+def test_invalid_samesite_rejected_at_startup(monkeypatch):
+    monkeypatch.setenv("SESSION_COOKIE_SAMESITE", "chaotic")
+    settings.cache_clear()
+    with pytest.raises(RuntimeError):
+        security.validate_startup()
+
+
+def test_csrf_guard_blocks_foreign_origin_when_samesite_none(monkeypatch):
+    monkeypatch.setenv("SESSION_COOKIE_SAMESITE", "none")
+    monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
+    settings.cache_clear()
+    client, fake = _client(monkeypatch)
+    r = client.post("/chat", json={"message": "hi"},
+                    headers={"Origin": "https://evil.example"})
+    assert r.status_code == 403
+    assert fake.seen == []
+
+
+def test_csrf_guard_allows_frontend_origin_and_no_origin(monkeypatch):
+    monkeypatch.setenv("SESSION_COOKIE_SAMESITE", "none")
+    monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
+    settings.cache_clear()
+    client, fake = _client(monkeypatch)
+    ok = client.post("/chat", json={"message": "hi"},
+                     headers={"Origin": "http://localhost:3000"})
+    assert ok.status_code == 200
+    no_origin = client.post("/chat", json={"message": "hi"})  # curl-style
+    assert no_origin.status_code == 200
+
+
+def test_csrf_guard_inactive_under_samesite_lax(monkeypatch):
+    # lax: the browser itself won't send the cookie cross-site, so the
+    # guard stays out of the way
+    client, fake = _client(monkeypatch)
+    r = client.post("/chat", json={"message": "hi"},
+                    headers={"Origin": "https://evil.example"})
+    assert r.status_code == 200
+
+
 def test_session_cookie_is_secure_by_default(monkeypatch):
     # Simulate prod: no SESSION_COOKIE_SECURE override → Secure flag present
     monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
