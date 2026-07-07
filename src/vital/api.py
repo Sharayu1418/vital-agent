@@ -11,10 +11,11 @@ Identity model (interim until real auth in Phase 5) — see security.py:
 """
 from contextlib import asynccontextmanager
 
-from fastapi import Cookie, Depends, FastAPI, HTTPException
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Response, UploadFile
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
+from vital import ingest, memory
 from vital.config import settings
 from vital.graph import build_graph
 from vital.security import (SESSION_COOKIE, caller_is_trusted,
@@ -33,6 +34,15 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="VITAL", version="0.2.2", lifespan=lifespan)
+
+
+def _set_session(response: Response, new_session: str | None) -> None:
+    """Every route that resolves identity MUST call this — otherwise a new
+    anonymous user's data lands under an ID their browser never receives."""
+    if new_session:
+        response.set_cookie(SESSION_COOKIE, new_session, httponly=True,
+                            secure=settings().session_cookie_secure,
+                            samesite="lax", max_age=30 * 24 * 3600)
 
 
 class ChatRequest(BaseModel):
@@ -73,11 +83,58 @@ async def chat(
         yield {"event": "done", "data": ""}
 
     response = EventSourceResponse(stream())
-    if new_session:
-        response.set_cookie(SESSION_COOKIE, new_session, httponly=True,
-                            secure=settings().session_cookie_secure,
-                            samesite="lax", max_age=30 * 24 * 3600)
+    _set_session(response, new_session)
     return response
+
+
+class Identity:
+    """Dependency bundle: resolved user_id + session cookie to set (if new)."""
+    def __init__(self, trusted: bool = Depends(caller_is_trusted),
+                 vital_session: str | None = Cookie(default=None)):
+        self.trusted = trusted
+        self.session_cookie = vital_session
+
+    def resolve(self, req_user_id: str = "local-user") -> tuple[str, str | None]:
+        return resolve_identity(req_user_id, self.trusted, self.session_cookie)
+
+
+@app.post("/upload/health")
+async def upload_health(file: UploadFile, response: Response,
+                        ident: Identity = Depends()) -> dict:
+    """Apple Health export.xml or a sleep CSV → normalized per-user store.
+    Anonymous users can upload too — their data lives under their session."""
+    user_id, new_session = ident.resolve()
+    _set_session(response, new_session)
+    content = await file.read()
+    if len(content) > 50 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="file too large (50MB max)")
+    try:
+        if (file.filename or "").endswith(".xml"):
+            rows = ingest.parse_apple_health_xml(content)
+        else:
+            rows = ingest.parse_sleep_csv(content)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    ingest.save_sleep_data(user_id, rows)
+    return {"nights_imported": len(rows),
+            "date_range": [rows[0]["date"], rows[-1]["date"]]}
+
+
+@app.get("/memories")
+async def list_memories(response: Response, ident: Identity = Depends()) -> dict:
+    """What VITAL knows about you — transparency + debugging (Phase 2B)."""
+    user_id, new_session = ident.resolve()
+    _set_session(response, new_session)
+    return {"memories": memory.all_memories(memory.get_store(), user_id)}
+
+
+@app.delete("/memories/{key}")
+async def delete_memory(key: str, response: Response,
+                        ident: Identity = Depends()) -> dict:
+    user_id, new_session = ident.resolve()
+    _set_session(response, new_session)
+    memory.forget(memory.get_store(), user_id, key)
+    return {"deleted": key}
 
 
 if settings().debug_endpoints:  # route does not exist unless explicitly enabled

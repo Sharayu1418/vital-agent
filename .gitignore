@@ -6,6 +6,12 @@ __pycache__/
 .ruff_cache/
 uv.lock
 
+# user health data + local databases — NEVER commit (P1)
+data/
+*.db
+*.db-journal
+*.sqlite*
+
 .DS_Store
 
 docs/vital-review-teachings.md

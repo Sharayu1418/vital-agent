@@ -25,6 +25,9 @@ CREATE TABLE IF NOT EXISTS interests (
 CREATE TABLE IF NOT EXISTS ideas (
     user_id TEXT, idea TEXT, category TEXT, created TEXT
 );
+CREATE TABLE IF NOT EXISTS sandbox_runs (
+    user_id TEXT, ts TEXT, ok INTEGER, error TEXT, code TEXT
+);
 """
 
 
@@ -91,6 +94,24 @@ def save_idea(idea: str, category: str) -> None:
     with _conn() as c:
         c.execute("INSERT INTO ideas VALUES (?, ?, ?, ?)",
                   (current_user_id.get(), idea, category, date.today().isoformat()))
+
+
+def log_sandbox_run(code: str, ok: bool, error: str | None) -> None:
+    """Audit trail: every snippet of generated code that reached the
+    execution gate, per user, with outcome (Phase 2 safety rail)."""
+    from datetime import datetime
+    with _conn() as c:
+        c.execute("INSERT INTO sandbox_runs VALUES (?, ?, ?, ?, ?)",
+                  (current_user_id.get(), datetime.utcnow().isoformat(),
+                   int(ok), error, code))
+
+
+def sandbox_audit(limit: int = 50) -> list[dict]:
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT ts, ok, error, code FROM sandbox_runs WHERE user_id = ? "
+            "ORDER BY ts DESC LIMIT ?", (current_user_id.get(), limit)).fetchall()
+    return [dict(r) for r in rows]
 
 
 def saved_ideas() -> list[dict]:

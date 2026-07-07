@@ -161,6 +161,37 @@ def test_anonymous_session_persists_across_requests(monkeypatch):
     assert fake.seen[0] == fake.seen[1]  # same client → same thread → continuity
 
 
+def test_memories_route_issues_session_cookie_to_new_anonymous_user(monkeypatch):
+    # P1 regression: identity-resolving routes other than /chat must also
+    # set the cookie, or first-contact uploads land under an unreachable ID
+    client, _ = _client(monkeypatch)
+    r = client.get("/memories")
+    assert r.status_code == 200
+    assert security.SESSION_COOKIE in r.cookies
+
+
+def test_memories_route_reuses_existing_session(monkeypatch):
+    client, _ = _client(monkeypatch)
+    first = client.get("/memories")
+    session = first.cookies[security.SESSION_COOKIE]
+    second = client.get("/memories")  # cookie jar sends it back
+    assert security.SESSION_COOKIE not in second.headers.get("set-cookie", "")
+    assert client.cookies[security.SESSION_COOKIE] == session
+
+
+def test_upload_and_chat_share_anonymous_identity(monkeypatch, tmp_path):
+    # end-to-end P1 scenario: anonymous upload → same session chats → same user_id
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
+    settings.cache_clear()
+    client, fake = _client(monkeypatch)
+    up = client.post("/upload/health",
+                     files={"file": ("sleep.csv", b"date,duration_min\n2026-07-01,420\n")})
+    assert up.status_code == 200
+    session = client.cookies[security.SESSION_COOKIE]
+    client.post("/chat", json={"message": "how did I sleep?"})
+    assert fake.seen[0].startswith(f"anon-{session}:")
+
+
 def test_session_cookie_is_secure_by_default(monkeypatch):
     # Simulate prod: no SESSION_COOKIE_SECURE override → Secure flag present
     monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")

@@ -13,6 +13,8 @@ dependencies = [
     "httpx>=0.28",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
+    "e2b-code-interpreter>=1.0",
+    "python-multipart>=0.0.18",
 ]
 
 [project.optional-dependencies]

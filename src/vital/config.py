@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     # Cloud Run terminates TLS); local dev over http sets false in .env.
     session_cookie_secure: bool = True
 
+    # --- Phase 2: sandbox + memory ---
+    e2b_api_key: str | None = None       # from e2b.dev; free tier for dev
+    sandbox_timeout_seconds: float = 30.0
+    max_repair_attempts: int = 3
+    data_dir: str = "data"               # per-user uploaded health data (GCS in prod)
+    memory_recall_limit: int = 5
+
 
 @lru_cache
 def settings() -> Settings:
