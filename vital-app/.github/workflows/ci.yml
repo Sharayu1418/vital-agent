@@ -1,0 +1,23 @@
+name: ci
+# Free layer on every push/PR: lint + the full offline suite.
+# No GCP, no keys — anything needing credentials is skipped by design.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.11
+      - run: uv sync --extra dev
+      - run: uv run ruff check src tests scripts
+      - run: uv run pytest -q
+        env:
+          GOOGLE_CLOUD_PROJECT: ci
+          OPENWEATHER_API_KEY: ci
+          GOOGLE_PLACES_API_KEY: ci
+          SESSION_COOKIE_SECURE: "false"

@@ -1,17 +1,3 @@
-.env
-__pycache__/
-*.pyc
-.venv/
-.pytest_cache/
-.ruff_cache/
-uv.lock
-
-# user health data + local databases — NEVER commit (P1)
-data/
-*.db
-*.db-journal
-*.sqlite*
-
+# monorepo root: vital-app (backend) + vital-web (frontend) + planning docs
+# per-folder ignores live in vital-app/.gitignore and vital-web/.gitignore
 .DS_Store
-
-docs/vital-review-teachings.md
