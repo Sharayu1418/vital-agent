@@ -1,0 +1,19 @@
+{
+  "expo": {
+    "name": "VITAL",
+    "slug": "vital",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0f1115",
+    "android": {
+      "package": "com.sharayu.vital",
+      "versionCode": 1,
+      "adaptiveIcon": { "backgroundColor": "#0f1115" },
+      "permissions": []
+    },
+    "extra": {
+      "apiBase": "http://10.0.2.2:8000"
+    }
+  }
+}
