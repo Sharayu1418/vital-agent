@@ -28,6 +28,13 @@ CREATE TABLE IF NOT EXISTS ideas (
 CREATE TABLE IF NOT EXISTS sandbox_runs (
     user_id TEXT, ts TEXT, ok INTEGER, error TEXT, code TEXT
 );
+CREATE TABLE IF NOT EXISTS committed_plans (
+    user_id TEXT, plan_hash TEXT, PRIMARY KEY (user_id, plan_hash)
+);
+CREATE TABLE IF NOT EXISTS calendar_events (
+    user_id TEXT, plan_hash TEXT, day TEXT, start TEXT, end TEXT,
+    title TEXT, kind TEXT
+);
 """
 
 
@@ -111,6 +118,31 @@ def sandbox_audit(limit: int = 50) -> list[dict]:
         rows = c.execute(
             "SELECT ts, ok, error, code FROM sandbox_runs WHERE user_id = ? "
             "ORDER BY ts DESC LIMIT ?", (current_user_id.get(), limit)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def plan_already_committed(user_id: str, plan_hash: str) -> bool:
+    with _conn() as c:
+        row = c.execute("SELECT 1 FROM committed_plans WHERE user_id = ? AND plan_hash = ?",
+                        (user_id, plan_hash)).fetchone()
+    return row is not None
+
+
+def save_calendar_events(user_id: str, plan_hash: str, items: list[dict]) -> None:
+    """Marker + events in ONE transaction — a crash can't leave the hash
+    recorded with the events missing (or vice versa)."""
+    with _conn() as c:
+        c.execute("INSERT INTO committed_plans VALUES (?, ?)", (user_id, plan_hash))
+        c.executemany(
+            "INSERT INTO calendar_events VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [(user_id, plan_hash, i["day"], i["start"], i["end"], i["title"], i["kind"])
+             for i in items])
+
+
+def calendar_events(user_id: str) -> list[dict]:
+    with _conn() as c:
+        rows = c.execute("SELECT day, start, end, title, kind FROM calendar_events "
+                         "WHERE user_id = ?", (user_id,)).fetchall()
     return [dict(r) for r in rows]
 
 

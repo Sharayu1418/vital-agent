@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     data_dir: str = "data"               # per-user uploaded health data (GCS in prod)
     memory_recall_limit: int = 5
 
+    # --- Phase 3: events provider (free key: developer.ticketmaster.com) ---
+    ticketmaster_api_key: str | None = None
+
 
 @lru_cache
 def settings() -> Settings:

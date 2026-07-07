@@ -16,8 +16,11 @@ from langgraph.graph import START, StateGraph
 from langgraph.types import Command
 
 from vital import memory
-from vital.agents import activity_scout, idea_generator, sleep_energy
+from vital.agents import (activity_scout, idea_generator, people_connector,
+                          sleep_energy)
+from vital.calendar import LocalCalendar
 from vital.config import settings
+from vital.planner import make_commit_plan, make_planner, make_request_approval
 from vital.state import VitalState
 from vital.supervisor import make_supervisor
 
@@ -63,7 +66,13 @@ def build_graph(checkpointer=None, store=None):
     builder.add_node("activity_scout", _agent_node(activity_scout.build_agent(), store))
     builder.add_node("sleep_energy", _agent_node(sleep_energy.build_agent(), store))
     builder.add_node("idea_generator", _agent_node(idea_generator.build_agent(), store))
+    builder.add_node("people_connector", _agent_node(people_connector.build_agent(), store))
     builder.add_node("memory_writer", _memory_writer(store, flash))
+    # Phase 3 HITL chain. Topology = security (D11): commit_plan is reachable
+    # ONLY via request_approval's resume — no other edge leads to it.
+    builder.add_node("planner", make_planner(flash))  # Pro only if evals demand it (D5)
+    builder.add_node("request_approval", make_request_approval())
+    builder.add_node("commit_plan", make_commit_plan(LocalCalendar()))
     builder.add_edge(START, "supervisor")
 
     if checkpointer is None:

@@ -108,14 +108,26 @@ def test_startup_allows_debug_with_token(monkeypatch):
 # ---------- Layer 2: through the real app ----------
 
 class FakeGraph:
-    """Records the thread_id the endpoint resolved; streams nothing."""
-    def __init__(self):
+    """Records the thread_id the endpoint resolved; streams nothing.
+    get_state mimics a finished (or paused) graph for the SSE tail logic."""
+    def __init__(self, final_messages=None, interrupts=()):
         self.seen: list[str] = []
+        self.final_messages = final_messages or []
+        self._interrupts = interrupts
 
     async def astream_events(self, _inputs, config=None, version=None):
         self.seen.append(config["configurable"]["thread_id"])
         return
         yield  # makes this an async generator
+
+    def get_state(self, _config):
+        from types import SimpleNamespace
+        tasks = ()
+        if self._interrupts:
+            tasks = (SimpleNamespace(interrupts=tuple(
+                SimpleNamespace(value=v) for v in self._interrupts)),)
+        return SimpleNamespace(tasks=tasks,
+                               values={"messages": self.final_messages})
 
 
 def _client(monkeypatch):
@@ -190,6 +202,51 @@ def test_upload_and_chat_share_anonymous_identity(monkeypatch, tmp_path):
     session = client.cookies[security.SESSION_COOKIE]
     client.post("/chat", json={"message": "how did I sleep?"})
     assert fake.seen[0].startswith(f"anon-{session}:")
+
+
+def test_chat_streams_and_terminates_with_done(monkeypatch):
+    # regression: _graph_stream must hand EventSourceResponse a generator
+    # OBJECT — returning the function crashed with 'function is not iterable'
+    client, _ = _client(monkeypatch)
+    r = client.post("/chat", json={"message": "hi"})
+    assert r.status_code == 200
+    assert "event: done" in r.text
+
+
+def test_state_written_ai_message_is_emitted_over_sse(monkeypatch):
+    # commit/reject confirmations are written to state by non-LLM nodes;
+    # the stream must surface them or the frontend shows nothing after approve
+    from types import SimpleNamespace
+    pytest.importorskip("langchain_google_vertexai")
+    from fastapi.testclient import TestClient
+    import vital.api as api
+
+    fake = FakeGraph(final_messages=[
+        SimpleNamespace(type="ai", content="Done — 2 events on your calendar.")])
+    monkeypatch.setattr(api, "graph", fake)
+    r = TestClient(api.app).post("/chat", json={"message": "approve it"})
+    assert "event: message" in r.text
+    assert "Done — 2 events on your calendar." in r.text
+
+
+def test_pending_interrupt_is_emitted_as_approval_required(monkeypatch):
+    pytest.importorskip("langchain_google_vertexai")
+    from fastapi.testclient import TestClient
+    import vital.api as api
+
+    fake = FakeGraph(interrupts=({"type": "plan_approval", "plan": {"items": []}},))
+    monkeypatch.setattr(api, "graph", fake)
+    r = TestClient(api.app).post("/chat", json={"message": "plan my weekend"})
+    assert "event: approval_required" in r.text
+    assert "plan_approval" in r.text
+    # paused runs must NOT also emit a stale state message
+    assert "event: message" not in r.text
+
+
+def test_approve_without_pending_interrupt_is_409(monkeypatch):
+    client, _ = _client(monkeypatch)  # FakeGraph with no interrupts
+    r = client.post("/approve", json={"action": "approve"})
+    assert r.status_code == 409
 
 
 def test_session_cookie_is_secure_by_default(monkeypatch):

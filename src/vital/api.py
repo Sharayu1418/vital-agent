@@ -56,6 +56,54 @@ async def healthz() -> dict:
     return {"status": "ok"}
 
 
+# nodes whose model output is machinery (routing decisions, plan JSON,
+# fact extraction) — never stream their raw tokens to the user
+_NON_USER_FACING = {"supervisor", "planner", "memory_writer"}
+
+
+def _graph_stream(graph_input, config):
+    """Shared SSE generator for /chat and /approve. Returns the async
+    generator OBJECT (callers hand it straight to EventSourceResponse).
+
+    Besides tokens/status, emits:
+    - approval_required: graph paused at request_approval (plan payload)
+    - message: a final AI message that was written to state by a non-LLM
+      node (commit/reject confirmations) and therefore never streamed
+    """
+    import json as _json
+
+    async def stream():
+        streamed_tokens = False
+        async for event in graph.astream_events(graph_input, config=config, version="v2"):
+            kind = event["event"]
+            node = event.get("metadata", {}).get("langgraph_node", "")
+            if kind == "on_chat_model_stream" and node not in _NON_USER_FACING:
+                chunk = event["data"]["chunk"].content
+                if chunk:
+                    streamed_tokens = True
+                    yield {"event": "token", "data": chunk}
+            elif kind == "on_tool_start":
+                yield {"event": "status", "data": f"{node}: using {event['name']}"}
+
+        snap = graph.get_state(config)
+        pending = [intr for task in getattr(snap, "tasks", ())
+                   for intr in getattr(task, "interrupts", ())]
+        for intr in pending:  # paused at request_approval?
+            yield {"event": "approval_required", "data": _json.dumps(intr.value)}
+
+        if not streamed_tokens and not pending:
+            # commit_plan / reject write their confirmation straight into
+            # state — surface it, or the frontend shows nothing after approve
+            messages = (getattr(snap, "values", None) or {}).get("messages", [])
+            last = messages[-1] if messages else None
+            if last is not None and getattr(last, "type", "") == "ai" \
+                    and getattr(last, "content", ""):
+                yield {"event": "message", "data": last.content}
+
+        yield {"event": "done", "data": ""}
+    return stream()  # the generator object, not the function (review fix)
+
+
 @app.post("/chat")
 async def chat(
     req: ChatRequest,
@@ -65,24 +113,37 @@ async def chat(
     user_id, new_session = resolve_identity(req.user_id, trusted, vital_session)
     current_user_id.set(user_id)  # tools read identity from here, never from the LLM
     config = {"configurable": {"thread_id": f"{user_id}:{req.thread_id}"}}
+    graph_input = {"messages": [("user", req.message)], "user_id": user_id,
+                   "routing_history": []}  # reset loop guard each turn
+    response = EventSourceResponse(_graph_stream(graph_input, config))
+    _set_session(response, new_session)
+    return response
 
-    async def stream():
-        async for event in graph.astream_events(
-            {"messages": [("user", req.message)], "user_id": user_id,
-             "routing_history": []},  # reset loop guard each turn
-            config=config, version="v2",
-        ):
-            kind = event["event"]
-            node = event.get("metadata", {}).get("langgraph_node", "")
-            if kind == "on_chat_model_stream" and node != "supervisor":
-                chunk = event["data"]["chunk"].content
-                if chunk:
-                    yield {"event": "token", "data": chunk}
-            elif kind == "on_tool_start":
-                yield {"event": "status", "data": f"{node}: using {event['name']}"}
-        yield {"event": "done", "data": ""}
 
-    response = EventSourceResponse(stream())
+class ApprovalRequest(BaseModel):
+    thread_id: str = Field(default="demo", max_length=64, pattern=r"^[\w-]+$")
+    user_id: str = Field(default="local-user", max_length=64, pattern=r"^[\w-]+$")
+    action: str = Field(pattern=r"^(approve|edit|reject)$")
+    feedback: str = Field(default="", max_length=1000)
+
+
+@app.post("/approve")
+async def approve(
+    req: ApprovalRequest,
+    trusted: bool = Depends(caller_is_trusted),
+    vital_session: str | None = Cookie(default=None),
+) -> EventSourceResponse:
+    """Resume a paused plan-approval interrupt. The resume value reaches
+    request_approval() exactly where interrupt() returned."""
+    from langgraph.types import Command as ResumeCommand
+
+    user_id, new_session = resolve_identity(req.user_id, trusted, vital_session)
+    current_user_id.set(user_id)
+    config = {"configurable": {"thread_id": f"{user_id}:{req.thread_id}"}}
+    if not any(t.interrupts for t in getattr(graph.get_state(config), "tasks", ())):
+        raise HTTPException(status_code=409, detail="nothing awaiting approval on this thread")
+    resume = ResumeCommand(resume={"action": req.action, "feedback": req.feedback})
+    response = EventSourceResponse(_graph_stream(resume, config))
     _set_session(response, new_session)
     return response
 

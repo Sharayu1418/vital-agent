@@ -4,7 +4,7 @@ These hit real Vertex AI (cheap: Flash, ~30 tokens/case). Run explicitly:
 
     VITAL_LIVE_EVALS=1 uv run pytest tests/test_routing.py -v
 
-Gate (Phase 1 DoD): >= 18/20.
+Gate: >= 90% (Phase 1 DoD was 18/20; now 26 cases with Phase 3 routes).
 """
 import os
 
@@ -29,6 +29,12 @@ CASES = [
     ("feeling restless and directionless", "idea_generator"),
     ("give me a side project idea", "idea_generator"),
     ("what should I build this summer", "idea_generator"),
+    ("are there pottery groups near me?", "people_connector"),
+    ("I want to meet people who are into climbing", "people_connector"),
+    ("find me a running club in Brooklyn", "people_connector"),
+    ("ok plan my weekend around all this", "planner"),
+    ("put the run and the meetup on my calendar", "planner"),
+    ("make me a schedule for next week", "planner"),
     ("thanks, that's all!", "FINISH"),
     ("perfect, that works", "FINISH"),
     ("ok great, bye", "FINISH"),
