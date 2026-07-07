@@ -1,232 +1,245 @@
 "use client";
-/* VITAL frontend — one client component, on purpose (single-file artifact
- * discipline until real complexity demands splitting).
- *
- * Talks to the FastAPI backend over SSE. Identity is the httponly session
- * cookie the backend issues — hence credentials:"include" on every fetch.
- * SSE events handled: token, status, message, approval_required, done.
- */
-import { useEffect, useRef, useState } from "react";
+/* Orchestrator: sidebar (threads) | chat | live side panel.
+ * Server owns conversation state (checkpointer); localStorage owns only the
+ * thread list and theme. */
+import { useCallback, useEffect, useState } from "react";
 
-import {
-  applyEvent, initialStream, shouldKeepBubble, sseEvents,
-} from "./lib/stream";
-
-const API = process.env.NEXT_PUBLIC_API_BASE;
-
-const STARTERS = [
-  "I slept 4 hours and I'm somehow buzzing with energy",
-  "Bored out of my mind — what should I do this weekend?",
-  "I want a hobby but have no idea what",
-  "Find me people who are into bouldering",
-];
+import Chat from "./components/Chat";
+import Sidebar from "./components/Sidebar";
+import SidePanel from "./components/SidePanel";
+import { api } from "./lib/api";
+import { applyEvent, initialStream, shouldKeepBubble, sseEvents } from "./lib/stream";
+import { loadThreads, newThread, renameIfNew, saveThreads, uid } from "./lib/threads";
 
 export default function Home() {
-  const [messages, setMessages] = useState([]); // {role, text, status?}
+  const [theme, setTheme] = useState("dark");
+  const [threads, setThreads] = useState([]);
+  const [activeId, setActiveId] = useState(null);
+  const [messages, setMessages] = useState([]);
   const [pendingPlan, setPendingPlan] = useState(null);
   const [editText, setEditText] = useState("");
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [memories, setMemories] = useState(null); // null = drawer closed
-  const [threadId] = useState("web");
-  const bottomRef = useRef(null);
+  const [thinking, setThinking] = useState(false);
+  const [sleep, setSleep] = useState(null);
+  const [events, setEvents] = useState([]);
+  const [memories, setMemories] = useState([]);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(false);
 
+  // ---- boot: theme + threads + panel data ----
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, pendingPlan]);
+    const savedTheme = localStorage.getItem("vital_theme") || "dark";
+    setTheme(savedTheme);
+    document.documentElement.dataset.theme = savedTheme;
 
+    let list = loadThreads(localStorage);
+    if (list.length === 0) list = [newThread()];
+    setThreads(list);
+    setActiveId(list[0].id);
+    refreshPanel();
+    loadHistory(list[0].id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function toggleTheme() {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    document.documentElement.dataset.theme = next;
+    localStorage.setItem("vital_theme", next);
+  }
+
+  const refreshPanel = useCallback(async () => {
+    try {
+      const [s, c, m] = await Promise.all([
+        api.sleepRecent(), api.calendar(), api.memories(),
+      ]);
+      if (s.ok) setSleep(await s.json());
+      if (c.ok) setEvents((await c.json()).events);
+      if (m.ok) setMemories((await m.json()).memories);
+    } catch { /* panel is decorative; chat still works */ }
+  }, []);
+
+  async function loadHistory(threadId) {
+    setMessages([]);
+    setPendingPlan(null);
+    try {
+      const r = await api.threadMessages(threadId);
+      if (!r.ok) return;
+      const body = await r.json();
+      setMessages(body.messages.map((m, i) => ({
+        id: `h${i}`, role: m.role === "human" ? "user" : "ai", text: m.text,
+      })));
+      if (body.pending_approval) setPendingPlan(body.pending_approval.plan);
+    } catch { /* fresh thread */ }
+  }
+
+  // ---- thread ops ----
+  function selectThread(id) {
+    if (id === activeId) return;
+    setActiveId(id);
+    setSidebarOpen(false);
+    loadHistory(id);
+  }
+
+  function createThread() {
+    const t = newThread();
+    const list = [t, ...threads];
+    setThreads(list);
+    saveThreads(list, localStorage);
+    setActiveId(t.id);
+    setMessages([]);
+    setPendingPlan(null);
+    setSidebarOpen(false);
+  }
+
+  function deleteThread(id) {
+    const list = threads.filter((t) => t.id !== id);
+    const next = list.length ? list : [newThread()];
+    setThreads(next);
+    saveThreads(next, localStorage);
+    if (id === activeId) {
+      setActiveId(next[0].id);
+      loadHistory(next[0].id);
+    }
+  }
+
+  // ---- streaming ----
   async function consume(response) {
-    // Stable-id updates: never touch "the last message" — a late event
-    // after other state changes must not clobber or delete streamed text.
-    const id = crypto.randomUUID();
+    const id = uid();
     let st = initialStream();
-    setMessages((m) => [...m, { id, role: "ai", text: "" }]);
-    const sync = () => setMessages((m) => m.map((msg) =>
-      msg.id === id ? { ...msg, text: st.text, status: st.status } : msg));
+    let placed = false;
+    const sync = () => {
+      if (!placed) {
+        placed = true;
+        setThinking(false);
+        setMessages((m) => [...m, { id, role: "ai", text: st.text, status: st.status }]);
+        return;
+      }
+      setMessages((m) => m.map((msg) =>
+        msg.id === id ? { ...msg, text: st.text, status: st.status } : msg));
+    };
 
     for await (const ev of sseEvents(response)) {
       st = applyEvent(st, ev);
       if (ev.event === "approval_required") setPendingPlan(st.plan);
-      sync();
+      if (st.text || st.status) sync();
     }
-    st = { ...st, status: null };
-    sync(); // clear any lingering "using tool…" line
-    if (!shouldKeepBubble(st) && !st.approval) {
-      setMessages((m) => m.filter((msg) => msg.id !== id));
+    setThinking(false);
+    if (placed) {
+      st = { ...st, status: null };
+      sync();
+      if (!shouldKeepBubble(st)) setMessages((m) => m.filter((msg) => msg.id !== id));
     }
   }
 
   async function send(text) {
-    if (!text.trim() || busy) return;
+    if (!text.trim() || busy || !activeId) return;
     setBusy(true);
+    setThinking(true);
     setInput("");
     setPendingPlan(null);
-    setMessages((m) => [...m, { role: "user", text }]);
+    setMessages((m) => [...m, { id: uid(), role: "user", text }]);
+    const renamed = renameIfNew(threads, activeId, text);
+    setThreads(renamed);
+    saveThreads(renamed, localStorage);
     try {
-      const r = await fetch(`${API}/chat`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, thread_id: threadId }),
-      });
-      if (r.status === 429) {
-        const detail = (await r.json()).detail;
-        setMessages((m) => [...m, { role: "ai", text: detail }]);
+      const r = await api.chat(text, activeId);
+      if (!r.ok) {
+        const detail = (await r.json().catch(() => ({}))).detail ?? `Server error (${r.status})`;
+        setMessages((m) => [...m, { id: uid(), role: "ai", text: detail }]);
       } else {
         await consume(r);
       }
     } catch {
-      setMessages((m) => [...m, { role: "ai", text: "Can't reach the backend — is it running?" }]);
+      setMessages((m) => [...m, { id: uid(), role: "ai",
+        text: "Can't reach the backend — is it running?" }]);
     } finally {
       setBusy(false);
+      setThinking(false);
+      refreshPanel();
     }
   }
 
   async function decide(action, feedback = "") {
+    if (busy) return;
     setBusy(true);
+    setThinking(true);
     setPendingPlan(null);
     setEditText("");
     try {
-      const r = await fetch(`${API}/approve`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, feedback, thread_id: threadId }),
-      });
-      await consume(r);
+      const r = await api.approve(action, feedback, activeId);
+      if (!r.ok) {
+        const detail = (await r.json().catch(() => ({}))).detail ?? `Server error (${r.status})`;
+        setMessages((m) => [...m, { id: uid(), role: "ai", text: detail }]);
+      } else {
+        await consume(r);
+      }
     } finally {
       setBusy(false);
+      setThinking(false);
+      refreshPanel();
     }
   }
 
   async function upload(file) {
-    const form = new FormData();
-    form.append("file", file);
-    const r = await fetch(`${API}/upload/health`, {
-      method: "POST", credentials: "include", body: form,
-    });
-    const body = await r.json();
+    const r = await api.upload(file).catch(() => null);
+    if (!r) {
+      setMessages((m) => [...m, { id: uid(), role: "ai",
+        text: "Upload failed — can't reach the backend." }]);
+      return;
+    }
+    const body = await r.json().catch(() => ({}));
     setMessages((m) => [...m, {
-      role: "ai",
+      id: uid(), role: "ai",
       text: r.ok
-        ? `Imported ${body.nights_imported} nights of sleep data (${body.date_range[0]} → ${body.date_range[1]}). Ask me anything about your sleep.`
-        : `Upload failed: ${body.detail}`,
+        ? `Imported **${body.nights_imported} nights** of sleep data (${body.date_range[0]} → ${body.date_range[1]}). Ask me anything about your sleep.`
+        : `Upload failed: ${body.detail ?? r.status}`,
     }]);
-  }
-
-  async function toggleMemories() {
-    if (memories) return setMemories(null);
-    const r = await fetch(`${API}/memories`, { credentials: "include" });
-    setMemories((await r.json()).memories);
+    refreshPanel();
   }
 
   async function forget(key) {
-    await fetch(`${API}/memories/${key}`, { method: "DELETE", credentials: "include" });
+    await api.forget(key);
     setMemories((mems) => mems.filter((m) => m.key !== key));
   }
 
   async function rate(idx, rating) {
     setMessages((m) => m.map((msg, i) => (i === idx ? { ...msg, rated: rating } : msg)));
-    await fetch(`${API}/feedback`, {
-      method: "POST", credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ rating, thread_id: threadId }),
-    });
+    api.feedback(rating, activeId);
   }
 
   return (
-    <div className="shell">
-      <header className="top">
-        <h1>VITAL<span>.</span></h1>
-        <div className="top-actions">
-          <label htmlFor="health-upload"><button onClick={() =>
-            document.getElementById("health-upload").click()}>Upload sleep data</button></label>
-          <input id="health-upload" type="file" accept=".csv,.xml"
-            onChange={(e) => e.target.files[0] && upload(e.target.files[0])} />
-          <button onClick={toggleMemories}>
-            {memories ? "Hide" : "What VITAL knows"}
-          </button>
-        </div>
-      </header>
+    <div className="app">
+      <Sidebar threads={threads} activeId={activeId}
+        onSelect={selectThread} onNew={createThread} onDelete={deleteThread}
+        theme={theme} onToggleTheme={toggleTheme}
+        open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
-      {memories && (
-        <div className="drawer">
-          <h3>What VITAL knows about you</h3>
-          {memories.length === 0 && <p className="hint">Nothing yet — it learns as you chat.</p>}
-          {memories.map((m) => (
-            <div className="memory-row" key={m.key}>
-              <span>{m.fact}</span>
-              <button className="ghost-danger" onClick={() => forget(m.key)}>forget</button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {messages.length === 0 && (
-        <>
-          <p className="hint">One place for sleep, energy, activities, ideas and
-            people — agents that know you, instead of search. Try:</p>
-          <div className="starters">
-            {STARTERS.map((s) => (
-              <button key={s} onClick={() => send(s)}>{s}</button>
-            ))}
+      <main className="main">
+        <header className="topbar">
+          <button className="icon-btn only-mobile" onClick={() => setSidebarOpen(true)}>☰</button>
+          <span className="topbar-title">
+            {threads.find((t) => t.id === activeId)?.title ?? "VITAL"}
+          </span>
+          <div className="topbar-actions">
+            <label className="icon-btn" title="Upload sleep data (CSV or Apple Health XML)">
+              ⬆
+              <input type="file" accept=".csv,.xml" hidden
+                onChange={(e) => e.target.files[0] && upload(e.target.files[0])} />
+            </label>
+            <button className="icon-btn only-mobile" onClick={() => setPanelOpen(true)}>☾</button>
           </div>
-        </>
-      )}
+        </header>
 
-      {messages.map((m, i) => (m.role === "ai" && !m.text && !m.status) ? null : (
-        <div className={`msg ${m.role}`} key={m.id ?? i}>
-          <div className="bubble">
-            {m.text}
-            {m.status && <span className="status-line">{m.status}…</span>}
-            {m.role === "ai" && m.text && !busy && (
-              <span className="feedback">
-                <button className={m.rated === "up" ? "chosen" : ""}
-                  onClick={() => rate(i, "up")}>👍</button>
-                <button className={m.rated === "down" ? "chosen" : ""}
-                  onClick={() => rate(i, "down")}>👎</button>
-              </span>
-            )}
-          </div>
-        </div>
-      ))}
+        <Chat messages={messages} pendingPlan={pendingPlan} busy={busy}
+          thinking={thinking} input={input} setInput={setInput}
+          editText={editText} setEditText={setEditText}
+          onSend={send} onDecide={decide} onRate={rate} />
+      </main>
 
-      {pendingPlan && (
-        <div className="plan-card">
-          <h3>Proposed plan — your call</h3>
-          {pendingPlan.items.map((it, i) => (
-            <div className="plan-item" key={i}>
-              <span className="when">{it.day} {it.start}–{it.end}</span>
-              <span>{it.title}</span>
-              <span className="kind">{it.kind}</span>
-            </div>
-          ))}
-          {pendingPlan.tradeoffs && pendingPlan.tradeoffs !== "none" && (
-            <p className="plan-tradeoffs">Tradeoffs: {pendingPlan.tradeoffs}</p>
-          )}
-          <div className="plan-actions">
-            <button className="primary" onClick={() => decide("approve")}>Approve</button>
-            <button className="ghost-danger" onClick={() => decide("reject")}>Reject</button>
-            <input placeholder="…or ask for a change" value={editText}
-              onChange={(e) => setEditText(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && editText && decide("edit", editText)} />
-          </div>
-        </div>
-      )}
-
-      <div ref={bottomRef} />
-
-      <div className="composer">
-        <div className="inner">
-          <textarea value={input} placeholder={busy ? "thinking…" : "Talk to VITAL"}
-            disabled={busy}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input); }
-            }} />
-          <button className="primary" disabled={busy} onClick={() => send(input)}>Send</button>
-        </div>
-      </div>
+      <SidePanel sleep={sleep} events={events} memories={memories}
+        onForget={forget} open={panelOpen} onClose={() => setPanelOpen(false)} />
     </div>
   );
 }

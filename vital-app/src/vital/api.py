@@ -284,6 +284,68 @@ async def upload_health(file: UploadFile, response: Response,
             "date_range": [rows[0]["date"], rows[-1]["date"]]}
 
 
+# ---------- Side-panel data endpoints (Phase 5 UI) ----------
+
+@app.get("/sleep/recent")
+async def sleep_recent(response: Response, ident: Identity = Depends()) -> dict:
+    """Last 14 nights, merging manual logs with uploaded data (upload wins
+    on date conflicts) — feeds the side-panel trend chart."""
+    import csv as _csv
+
+    user_id, new_session = ident.resolve()
+    current_user_id.set(user_id)  # sleep_history reads the contextvar —
+    # without this it returns whoever's identity was set last (P1 bug)
+    _set_session(response, new_session)
+    nights: dict[str, dict] = {}
+    for row in storage.sleep_history(30):
+        nights[row["log_date"]] = {"date": row["log_date"],
+                                   "duration_min": row["duration_min"],
+                                   "quality": row["quality"], "source": "manual"}
+    path = ingest.user_sleep_csv(user_id)
+    if path:
+        with path.open() as f:
+            for row in _csv.DictReader(f):
+                nights[row["date"]] = {"date": row["date"],
+                                       "duration_min": int(row["duration_min"]),
+                                       "quality": row.get("quality") or None,
+                                       "source": row.get("source", "upload")}
+    ordered = sorted(nights.values(), key=lambda n: n["date"])[-14:]
+    return {"nights": ordered, "target_min": 480}
+
+
+@app.get("/calendar")
+async def calendar_view(response: Response, ident: Identity = Depends()) -> dict:
+    """Committed plan events — the side panel's 'Your plan' section."""
+    user_id, new_session = ident.resolve()
+    _set_session(response, new_session)
+    return {"events": storage.calendar_events(user_id)}
+
+
+@app.get("/threads/{thread_id}/messages")
+async def thread_messages(thread_id: str, response: Response,
+                          ident: Identity = Depends()) -> dict:
+    """Conversation history for thread switching. Identity-scoped by
+    construction: the checkpointer key is '{user_id}:{thread_id}', so a
+    caller can only ever read their own threads."""
+    if not thread_id.replace("-", "").replace("_", "").isalnum() or len(thread_id) > 64:
+        raise HTTPException(status_code=422, detail="invalid thread id")
+    user_id, new_session = ident.resolve()
+    _set_session(response, new_session)
+    snap = graph.get_state({"configurable": {"thread_id": f"{user_id}:{thread_id}"}})
+    values = getattr(snap, "values", None) or {}
+    out = []
+    for m in values.get("messages", []):
+        role = getattr(m, "type", "")
+        if role not in ("human", "ai"):
+            continue  # tool chatter never reaches the UI
+        text = visible_text(getattr(m, "content", None))
+        if text:
+            out.append({"role": role, "text": text})
+    pending = [intr.value for task in getattr(snap, "tasks", ())
+               for intr in getattr(task, "interrupts", ())]
+    return {"messages": out, "pending_approval": pending[0] if pending else None}
+
+
 class FeedbackRequest(BaseModel):
     thread_id: str = Field(default="demo", max_length=64, pattern=r"^[\w-]+$")
     rating: str = Field(pattern=r"^(up|down)$")
