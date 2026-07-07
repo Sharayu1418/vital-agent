@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     # --- Phase 3: events provider (free key: developer.ticketmaster.com) ---
     ticketmaster_api_key: str | None = None
 
+    # --- Phase 4: guardrails ---
+    daily_token_budget: int = 50_000   # per user; ~$0.05/day at Flash prices
+    recursion_limit: int = 25          # hard cap on graph steps per turn
+
 
 @lru_cache
 def settings() -> Settings:

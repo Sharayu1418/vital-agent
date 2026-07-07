@@ -15,7 +15,7 @@ from fastapi import Cookie, Depends, FastAPI, HTTPException, Response, UploadFil
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from vital import ingest, memory
+from vital import guardrails, ingest, memory, metrics
 from vital.config import settings
 from vital.graph import build_graph
 from vital.security import (SESSION_COOKIE, caller_is_trusted,
@@ -61,7 +61,7 @@ async def healthz() -> dict:
 _NON_USER_FACING = {"supervisor", "planner", "memory_writer"}
 
 
-def _graph_stream(graph_input, config):
+def _graph_stream(graph_input, config, user_id: str):
     """Shared SSE generator for /chat and /approve. Returns the async
     generator OBJECT (callers hand it straight to EventSourceResponse).
 
@@ -73,14 +73,19 @@ def _graph_stream(graph_input, config):
     import json as _json
 
     async def stream():
+        import time
+        t0 = time.monotonic()
         streamed_tokens = False
-        async for event in graph.astream_events(graph_input, config=config, version="v2"):
+        streamed_chars = 0
+        run_config = {**config, "recursion_limit": settings().recursion_limit}
+        async for event in graph.astream_events(graph_input, config=run_config, version="v2"):
             kind = event["event"]
             node = event.get("metadata", {}).get("langgraph_node", "")
             if kind == "on_chat_model_stream" and node not in _NON_USER_FACING:
                 chunk = event["data"]["chunk"].content
                 if chunk:
                     streamed_tokens = True
+                    streamed_chars += len(chunk)
                     yield {"event": "token", "data": chunk}
             elif kind == "on_tool_start":
                 yield {"event": "status", "data": f"{node}: using {event['name']}"}
@@ -100,6 +105,20 @@ def _graph_stream(graph_input, config):
                     and getattr(last, "content", ""):
                 yield {"event": "message", "data": last.content}
 
+        # Phase 4: usage + metrics. user_id comes from the CALLER's resolved
+        # identity, never from graph state — state can lag or be absent on a
+        # paused thread, and billing the wrong identity breaks the budget.
+        values = getattr(snap, "values", None) or {}
+        est = guardrails.estimate_tokens(str(graph_input)[:2000], "x" * streamed_chars)
+        try:
+            guardrails.record_usage(user_id, est)
+        except Exception:
+            pass  # accounting must never break the stream
+        metrics.log_turn(user_id, str(config["configurable"]["thread_id"]),
+                         routing_hops=len(values.get("routing_history", []) or []),
+                         est_tokens=est,
+                         duration_ms=int((time.monotonic() - t0) * 1000))
+
         yield {"event": "done", "data": ""}
     return stream()  # the generator object, not the function (review fix)
 
@@ -112,10 +131,26 @@ async def chat(
 ) -> EventSourceResponse:
     user_id, new_session = resolve_identity(req.user_id, trusted, vital_session)
     current_user_id.set(user_id)  # tools read identity from here, never from the LLM
+
+    # Guardrail 1: crisis messages bypass the agent pipeline entirely —
+    # deterministic path, no routing, no tools, no LLM dependency.
+    if guardrails.crisis_check(req.message):
+        async def crisis_stream():
+            yield {"event": "message", "data": guardrails.CRISIS_RESPONSE}
+            yield {"event": "done", "data": ""}
+        metrics.log_turn(user_id, req.thread_id, 0, 0, 0, kind="crisis_response")
+        response = EventSourceResponse(crisis_stream())
+        _set_session(response, new_session)
+        return response
+
+    # Guardrail 2: per-user daily token budget
+    if guardrails.budget_exceeded(user_id):
+        raise HTTPException(status_code=429, detail=guardrails.BUDGET_MESSAGE)
+
     config = {"configurable": {"thread_id": f"{user_id}:{req.thread_id}"}}
     graph_input = {"messages": [("user", req.message)], "user_id": user_id,
                    "routing_history": []}  # reset loop guard each turn
-    response = EventSourceResponse(_graph_stream(graph_input, config))
+    response = EventSourceResponse(_graph_stream(graph_input, config, user_id))
     _set_session(response, new_session)
     return response
 
@@ -139,11 +174,15 @@ async def approve(
 
     user_id, new_session = resolve_identity(req.user_id, trusted, vital_session)
     current_user_id.set(user_id)
+    # budget applies here too: an 'edit' resume re-invokes the planner LLM,
+    # so /approve must not be a budget bypass (Phase 4 review finding)
+    if guardrails.budget_exceeded(user_id):
+        raise HTTPException(status_code=429, detail=guardrails.BUDGET_MESSAGE)
     config = {"configurable": {"thread_id": f"{user_id}:{req.thread_id}"}}
     if not any(t.interrupts for t in getattr(graph.get_state(config), "tasks", ())):
         raise HTTPException(status_code=409, detail="nothing awaiting approval on this thread")
     resume = ResumeCommand(resume={"action": req.action, "feedback": req.feedback})
-    response = EventSourceResponse(_graph_stream(resume, config))
+    response = EventSourceResponse(_graph_stream(resume, config, user_id))
     _set_session(response, new_session)
     return response
 

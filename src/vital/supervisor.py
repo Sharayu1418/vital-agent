@@ -5,7 +5,7 @@ below; when routing evals fail, fix THIS prompt, don't upgrade the model.
 """
 from typing import Literal
 
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import AIMessage, SystemMessage
 from langgraph.graph import END
 from langgraph.types import Command
 from pydantic import BaseModel, Field
@@ -54,9 +54,21 @@ def make_supervisor(llm):
         if len(history) >= MAX_HOPS:
             return Command(goto=END)
 
-        decision: Route = router.invoke(
-            [SystemMessage(content=ROUTER_PROMPT), *state["messages"]]
-        )
+        # structured-output retry (Phase 4): transient validation/API
+        # failures get ONE retry; then fail closed with a human message
+        # instead of a 500 mid-conversation.
+        decision: Route | None = None
+        for attempt in (1, 2):
+            try:
+                decision = router.invoke(
+                    [SystemMessage(content=ROUTER_PROMPT), *state["messages"]])
+                break
+            except Exception:
+                if attempt == 2:
+                    return Command(goto=END, update={"messages": [AIMessage(
+                        content="I'm having trouble processing that right now — "
+                                "mind rephrasing or trying again in a moment?")]})
+
         if decision.next == "FINISH":
             return Command(goto=END)
         return Command(

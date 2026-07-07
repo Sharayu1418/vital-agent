@@ -29,7 +29,9 @@ def parse_sleep_csv(content: bytes) -> list[dict]:
 
     rows = []
     for raw in reader:
-        get = lambda k: (raw.get(fields[k]) or "").strip() if k in fields else ""
+        def get(k: str) -> str:
+            return (raw.get(fields[k]) or "").strip() if k in fields else ""
+
         date_s = get("date")
         datetime.strptime(date_s, "%Y-%m-%d")  # validate, raises ValueError
 

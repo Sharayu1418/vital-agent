@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS calendar_events (
     user_id TEXT, plan_hash TEXT, day TEXT, start TEXT, end TEXT,
     title TEXT, kind TEXT
 );
+CREATE TABLE IF NOT EXISTS token_usage (
+    user_id TEXT, day TEXT, tokens INTEGER, PRIMARY KEY (user_id, day)
+);
 """
 
 
@@ -119,6 +122,20 @@ def sandbox_audit(limit: int = 50) -> list[dict]:
             "SELECT ts, ok, error, code FROM sandbox_runs WHERE user_id = ? "
             "ORDER BY ts DESC LIMIT ?", (current_user_id.get(), limit)).fetchall()
     return [dict(r) for r in rows]
+
+
+def add_tokens(user_id: str, tokens: int) -> None:
+    with _conn() as c:
+        c.execute("""INSERT INTO token_usage VALUES (?, ?, ?)
+                     ON CONFLICT(user_id, day) DO UPDATE SET tokens = tokens + ?""",
+                  (user_id, date.today().isoformat(), tokens, tokens))
+
+
+def tokens_used_today(user_id: str) -> int:
+    with _conn() as c:
+        row = c.execute("SELECT tokens FROM token_usage WHERE user_id = ? AND day = ?",
+                        (user_id, date.today().isoformat())).fetchone()
+    return row["tokens"] if row else 0
 
 
 def plan_already_committed(user_id: str, plan_hash: str) -> bool:
