@@ -8,31 +8,66 @@ const mdComponents = {
 };
 
 const STARTERS = [
-  { icon: "🌙", text: "I slept 4 hours and I'm somehow buzzing with energy" },
-  { icon: "🧭", text: "Bored out of my mind — what should I do this weekend?" },
-  { icon: "💡", text: "I want a hobby but have no idea what" },
-  { icon: "🤝", text: "Find me people who are into bouldering" },
+  "I slept 4 hours but I'm buzzing with energy",
+  "What should I do this weekend?",
+  "I want a hobby but don't know what",
+  "Find people who are into bouldering",
 ];
 
-function Hero({ onStarter }) {
+function greeting() {
+  const h = new Date().getHours();
+  if (h >= 5 && h < 12) return { hi: "Good morning", line: "Where should today's energy go?" };
+  if (h < 17) return { hi: "Good afternoon", line: "Time for a reset, an idea, or a plan?" };
+  if (h < 22) return { hi: "Good evening", line: "How did today treat you?" };
+  return { hi: "Up late?", line: "Let's look after tomorrow-you." };
+}
+
+function Composer({ input, setInput, onSend, busy, hero = false }) {
+  const ref = useRef(null);
+  useEffect(() => { if (hero) ref.current?.focus(); }, [hero]);
+  return (
+    <div className={`composer-inner ${hero ? "hero-pill" : ""}`}>
+      <textarea ref={ref} value={input} rows={1}
+        placeholder={busy ? "thinking…" : "Ask anything…"}
+        disabled={busy}
+        onChange={(e) => setInput(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onSend(input); }
+        }} />
+      <button className="send" aria-label="Send" disabled={busy || !input.trim()}
+        onClick={() => onSend(input)}>↑</button>
+    </div>
+  );
+}
+
+function Hero({ onStarter, nudge, input, setInput, onSend, busy }) {
+  const g = greeting();
   return (
     <div className="hero">
-      <h2 className="hero-title">Where should your <span>energy</span> go today?</h2>
-      <p className="hero-sub">
-        Sleep, activities, ideas and people — one conversation with agents
-        that know you, instead of twelve tabs of search.
-      </p>
-      <div className="starter-grid">
-        {STARTERS.map((s) => (
-          <button className="starter-card" key={s.text} onClick={() => onStarter(s.text)}>
-            <span className="starter-icon">{s.icon}</span>
-            <span>{s.text}</span>
+      <p className="hero-hi">{g.hi}</p>
+      <h2 className="hero-title">{g.line}</h2>
+
+      <Composer input={input} setInput={setInput} onSend={onSend} busy={busy} hero />
+
+      {nudge && (
+        nudge.prompt ? (
+          <button className="nudge" onClick={() => onSend(nudge.prompt)}>
+            {nudge.text} <span className="nudge-go">→</span>
           </button>
+        ) : (
+          <p className="nudge nudge-static">{nudge.text}</p>
+        )
+      )}
+
+      <div className="starter-row">
+        {STARTERS.map((s) => (
+          <button className="starter-chip" key={s} onClick={() => onStarter(s)}>{s}</button>
         ))}
       </div>
+
       <p className="hero-foot">
-        Nothing is committed to your calendar without your approval. Everything
-        VITAL learns about you stays visible and deletable.
+        One place for sleep, energy, activities, ideas and people.
+        Nothing touches your calendar without your OK.
       </p>
     </div>
   );
@@ -40,7 +75,7 @@ function Hero({ onStarter }) {
 
 function PlanCard({ plan, editText, setEditText, onDecide, busy }) {
   return (
-    <div className="plan-card">
+    <div className="plan-card rise">
       <h3>Proposed plan — your call</h3>
       {plan.items.map((it, i) => (
         <div className="plan-item" key={i}>
@@ -69,9 +104,11 @@ function PlanCard({ plan, editText, setEditText, onDecide, busy }) {
 
 export default function Chat({
   messages, pendingPlan, busy, thinking, input, setInput, editText, setEditText,
-  onSend, onDecide, onRate,
+  onSend, onDecide, onRate, nudge,
 }) {
   const bottomRef = useRef(null);
+  const empty = messages.length === 0 && !busy;
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, pendingPlan, thinking]);
@@ -80,10 +117,13 @@ export default function Chat({
     <div className="chat">
       <div className="chat-scroll">
         <div className="chat-col">
-          {messages.length === 0 && !busy && <Hero onStarter={onSend} />}
+          {empty && (
+            <Hero onStarter={onSend} nudge={nudge}
+              input={input} setInput={setInput} onSend={onSend} busy={busy} />
+          )}
 
           {messages.map((m, i) => (m.role === "ai" && !m.text && !m.status) ? null : (
-            <div className={`msg ${m.role}`} key={m.id ?? i}>
+            <div className={`msg ${m.role} rise`} key={m.id ?? i}>
               <div className="bubble">
                 {m.role === "ai"
                   ? <ReactMarkdown components={mdComponents}>{m.text}</ReactMarkdown>
@@ -102,7 +142,7 @@ export default function Chat({
           ))}
 
           {thinking && (
-            <div className="msg ai">
+            <div className="msg ai rise">
               <div className="bubble thinking"><span /><span /><span /></div>
             </div>
           )}
@@ -115,20 +155,12 @@ export default function Chat({
         </div>
       </div>
 
-      <div className="composer">
-        <div className="composer-inner">
-          <textarea value={input} rows={1}
-            placeholder={busy ? "thinking…" : "Talk to VITAL"}
-            disabled={busy}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onSend(input); }
-            }} />
-          <button className="primary send" disabled={busy || !input.trim()}
-            onClick={() => onSend(input)}>↑</button>
+      {!empty && (
+        <div className="composer">
+          <Composer input={input} setInput={setInput} onSend={onSend} busy={busy} />
+          <p className="composer-hint">VITAL can make mistakes — plans always wait for your approval.</p>
         </div>
-        <p className="composer-hint">VITAL can make mistakes — plans always wait for your approval.</p>
-      </div>
+      )}
     </div>
   );
 }

@@ -13,8 +13,10 @@ set (same swap pattern as the checkpointer). Retrieval is keyword-overlap
 for now — pgvector semantic search is the Phase-4/5 upgrade, behind this
 same interface.
 """
+import atexit
 import difflib
 import uuid
+from contextlib import ExitStack
 from functools import lru_cache
 
 from pydantic import BaseModel, Field
@@ -24,6 +26,9 @@ from vital.config import settings
 NAMESPACE_SUFFIX = "profile"
 SIMILARITY_OVERWRITE = 0.8
 CONFIDENCE_FLOOR = 0.6
+
+_RESOURCE_STACK = ExitStack()
+atexit.register(_RESOURCE_STACK.close)
 
 EXTRACT_PROMPT = """Extract STABLE personal facts about the user from this \
 conversation snippet, if any.
@@ -54,7 +59,9 @@ def get_store():
     cfg = settings()
     if cfg.database_url:
         from langgraph.store.postgres import PostgresStore
-        store = PostgresStore.from_conn_string(cfg.database_url)
+        store = _RESOURCE_STACK.enter_context(
+            PostgresStore.from_conn_string(cfg.database_url)
+        )
         store.setup()
         return store
     from langgraph.store.memory import InMemoryStore

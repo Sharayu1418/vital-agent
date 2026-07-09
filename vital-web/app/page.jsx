@@ -209,6 +209,25 @@ export default function Home() {
     api.feedback(rating, activeId);
   }
 
+  // Human-centric nudge: one gentle, data-aware pull toward the next action
+  function nudgeFor() {
+    if (!sleep?.nights?.length) {
+      return { text: "Tip: upload your sleep data (⬆ top right) and VITAL can analyze your real nights" };
+    }
+    const target = sleep.target_min ?? 480;
+    const debtH = sleep.nights
+      .reduce((a, n) => a + Math.max(0, target - n.duration_min), 0) / 60;
+    if (debtH >= 2) {
+      return { text: `You're ${debtH.toFixed(1)}h behind on sleep this week — ask what to do about it`,
+               prompt: "What should I do about my sleep debt this week?" };
+    }
+    if (!events?.length) {
+      return { text: "Nothing on your plan yet — want a weekend built around your energy?",
+               prompt: "Plan my weekend around my energy levels" };
+    }
+    return null;
+  }
+
   return (
     <div className="app">
       <Sidebar threads={threads} activeId={activeId}
@@ -235,7 +254,7 @@ export default function Home() {
         <Chat messages={messages} pendingPlan={pendingPlan} busy={busy}
           thinking={thinking} input={input} setInput={setInput}
           editText={editText} setEditText={setEditText}
-          onSend={send} onDecide={decide} onRate={rate} />
+          onSend={send} onDecide={decide} onRate={rate} nudge={nudgeFor()} />
       </main>
 
       <SidePanel sleep={sleep} events={events} memories={memories}

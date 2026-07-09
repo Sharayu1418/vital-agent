@@ -4,7 +4,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 WORKDIR /app
 COPY pyproject.toml ./
 COPY src ./src
-RUN uv pip install --system --no-cache .
+RUN uv pip install --system --no-cache ".[postgres]"
 
 FROM python:3.11-slim
 # Run as non-root (Cloud Run doesn't require it; security reviews do)

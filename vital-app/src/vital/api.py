@@ -18,7 +18,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from vital import guardrails, ingest, memory, metrics, storage
 from vital.config import settings
-from vital.graph import build_graph
+from vital.graph import build_graph_async, close_graph_resources
 from vital.security import (SESSION_COOKIE, caller_is_trusted,
                             resolve_identity, validate_startup)
 from vital.storage import current_user_id
@@ -30,8 +30,11 @@ graph = None
 async def lifespan(app: FastAPI):
     global graph
     validate_startup()  # fail closed before serving anything
-    graph = build_graph()
-    yield
+    graph = await build_graph_async()
+    try:
+        yield
+    finally:
+        await close_graph_resources()
 
 
 app = FastAPI(title="VITAL", version="0.5.0", lifespan=lifespan)
@@ -119,6 +122,15 @@ def visible_text(content) -> str:
     return text if isinstance(text, str) else ""
 
 
+async def _aget_graph_state(config):
+    """Read graph state from async endpoints. Async-checkpointer graphs
+    (prod: AsyncPostgresSaver) require aget_state; sync/in-memory graphs
+    (local dev, tests) only have get_state. Prefer async, fall back to sync."""
+    if hasattr(graph, "aget_state"):
+        return await graph.aget_state(config)
+    return graph.get_state(config)
+
+
 def _graph_stream(graph_input, config, user_id: str):
     """Shared SSE generator for /chat and /approve. Returns the async
     generator OBJECT (callers hand it straight to EventSourceResponse).
@@ -148,7 +160,7 @@ def _graph_stream(graph_input, config, user_id: str):
             elif kind == "on_tool_start":
                 yield {"event": "status", "data": f"{node}: using {event['name']}"}
 
-        snap = graph.get_state(config)
+        snap = await _aget_graph_state(config)
         pending = [intr for task in getattr(snap, "tasks", ())
                    for intr in getattr(task, "interrupts", ())]
         for intr in pending:  # paused at request_approval?
@@ -242,7 +254,7 @@ async def approve(
     if guardrails.budget_exceeded(user_id):
         raise HTTPException(status_code=429, detail=guardrails.BUDGET_MESSAGE)
     config = {"configurable": {"thread_id": f"{user_id}:{req.thread_id}"}}
-    if not any(t.interrupts for t in getattr(graph.get_state(config), "tasks", ())):
+    if not any(t.interrupts for t in getattr(await _aget_graph_state(config), "tasks", ())):
         raise HTTPException(status_code=409, detail="nothing awaiting approval on this thread")
     resume = ResumeCommand(resume={"action": req.action, "feedback": req.feedback})
     response = EventSourceResponse(_graph_stream(resume, config, user_id))
@@ -331,7 +343,7 @@ async def thread_messages(thread_id: str, response: Response,
         raise HTTPException(status_code=422, detail="invalid thread id")
     user_id, new_session = ident.resolve()
     _set_session(response, new_session)
-    snap = graph.get_state({"configurable": {"thread_id": f"{user_id}:{thread_id}"}})
+    snap = await _aget_graph_state({"configurable": {"thread_id": f"{user_id}:{thread_id}"}})
     values = getattr(snap, "values", None) or {}
     out = []
     for m in values.get("messages", []):
@@ -390,7 +402,7 @@ if settings().debug_endpoints:  # route does not exist unless explicitly enabled
         validate_startup() guarantees a token exists; require it unconditionally."""
         if not trusted:
             raise HTTPException(status_code=401, detail="token required")
-        snap = graph.get_state({"configurable": {"thread_id": f"{user_id}:{thread_id}"}})
+        snap = await _aget_graph_state({"configurable": {"thread_id": f"{user_id}:{thread_id}"}})
         return {
             "routing_history": snap.values.get("routing_history", []),
             "message_count": len(snap.values.get("messages", [])),
