@@ -8,6 +8,7 @@ import Chat from "./components/Chat";
 import Sidebar from "./components/Sidebar";
 import SidePanel from "./components/SidePanel";
 import { api } from "./lib/api";
+import { isSynthesisSupported } from "./lib/speech";
 import { applyEvent, initialStream, shouldKeepBubble, sseEvents } from "./lib/stream";
 import { loadThreads, newThread, renameIfNew, saveThreads, uid } from "./lib/threads";
 
@@ -26,12 +27,17 @@ export default function Home() {
   const [memories, setMemories] = useState([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [ttsAvailable, setTtsAvailable] = useState(false);
+  const [autoRead, setAutoRead] = useState(false);
 
   // ---- boot: theme + threads + panel data ----
   useEffect(() => {
     const savedTheme = localStorage.getItem("vital_theme") || "dark";
     setTheme(savedTheme);
     document.documentElement.dataset.theme = savedTheme;
+
+    setTtsAvailable(isSynthesisSupported());
+    setAutoRead(localStorage.getItem("vital_read_aloud") === "1");
 
     let list = loadThreads(localStorage);
     if (list.length === 0) list = [newThread()];
@@ -41,6 +47,12 @@ export default function Home() {
     loadHistory(list[0].id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  function toggleAutoRead() {
+    const next = !autoRead;
+    setAutoRead(next);
+    localStorage.setItem("vital_read_aloud", next ? "1" : "0");
+  }
 
   function toggleTheme() {
     const next = theme === "dark" ? "light" : "dark";
@@ -69,6 +81,7 @@ export default function Home() {
       const body = await r.json();
       setMessages(body.messages.map((m, i) => ({
         id: `h${i}`, role: m.role === "human" ? "user" : "ai", text: m.text,
+        fromHistory: true, // never auto-read replies that were already there
       })));
       if (body.pending_approval) setPendingPlan(body.pending_approval.plan);
     } catch { /* fresh thread */ }
@@ -242,6 +255,12 @@ export default function Home() {
             {threads.find((t) => t.id === activeId)?.title ?? "VITAL"}
           </span>
           <div className="topbar-actions">
+            {ttsAvailable && (
+              <button className={`icon-btn ${autoRead ? "active" : ""}`}
+                aria-pressed={autoRead}
+                title={autoRead ? "Read replies aloud: on" : "Read replies aloud: off"}
+                onClick={toggleAutoRead}>🔊</button>
+            )}
             <label className="icon-btn" title="Upload sleep data (CSV or Apple Health XML)">
               ⬆
               <input type="file" accept=".csv,.xml" hidden
@@ -254,7 +273,8 @@ export default function Home() {
         <Chat messages={messages} pendingPlan={pendingPlan} busy={busy}
           thinking={thinking} input={input} setInput={setInput}
           editText={editText} setEditText={setEditText}
-          onSend={send} onDecide={decide} onRate={rate} nudge={nudgeFor()} />
+          onSend={send} onDecide={decide} onRate={rate} nudge={nudgeFor()}
+          autoRead={autoRead} />
       </main>
 
       <SidePanel sleep={sleep} events={events} memories={memories}
