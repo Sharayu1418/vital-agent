@@ -41,6 +41,30 @@ CREATE TABLE IF NOT EXISTS token_usage (
 CREATE TABLE IF NOT EXISTS feedback (
     user_id TEXT, thread_id TEXT, ts TEXT, rating TEXT, comment TEXT
 );
+CREATE TABLE IF NOT EXISTS activity_posts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL, display_name TEXT NOT NULL,
+    activity TEXT NOT NULL, city TEXT NOT NULL, area TEXT,
+    time_window TEXT, vibe TEXT, skill_level TEXT, budget TEXT,
+    group_size TEXT, notes TEXT, active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS activity_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id INTEGER NOT NULL, requester_user_id TEXT NOT NULL,
+    requester_name TEXT, message TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS user_blocks (
+    user_id TEXT NOT NULL, blocked_key TEXT NOT NULL,
+    created_at TEXT NOT NULL, PRIMARY KEY (user_id, blocked_key)
+);
+CREATE TABLE IF NOT EXISTS activity_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id INTEGER NOT NULL, reporter_user_id TEXT NOT NULL,
+    reason TEXT, created_at TEXT NOT NULL
+);
 """
 
 

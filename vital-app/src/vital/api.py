@@ -16,7 +16,7 @@ from fastapi import (Cookie, Depends, FastAPI, Header, HTTPException, Response,
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from vital import guardrails, ingest, memory, metrics, storage
+from vital import buddies, guardrails, ingest, memory, metrics, storage
 from vital.config import settings
 from vital.graph import build_graph_async, close_graph_resources
 from vital.security import (SESSION_COOKIE, caller_is_trusted,
@@ -48,7 +48,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings().frontend_origin],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "DELETE"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["Authorization", "Content-Type", "X-Vital-Session"],
     expose_headers=["X-Vital-Session"],
 )
@@ -61,7 +61,7 @@ async def csrf_origin_guard(request, call_next):
     an Origin header to cross-site fetches — reject mismatches. Requests
     without Origin (curl, server-to-server) pass; they carry no cookie jar."""
     cfg = settings()
-    if cfg.session_cookie_samesite == "none" and request.method in {"POST", "DELETE"}:
+    if cfg.session_cookie_samesite == "none" and request.method in {"POST", "PATCH", "DELETE"}:
         origin = request.headers.get("origin")
         if origin is not None and origin != cfg.frontend_origin:
             from fastapi.responses import JSONResponse
@@ -391,6 +391,146 @@ async def delete_memory(key: str, response: Response,
     _set_session(response, new_session)
     memory.forget(memory.get_store(), user_id, key)
     return {"deleted": key}
+
+
+# ---------- Activity Buddy Board (opt-in, safety-first) ----------
+# Identity is always server-resolved; a request body can never name whose
+# post is created, updated, or decided. Domain errors map to HTTP here:
+# LookupError→404, PermissionError→403, ValueError→409.
+
+def _buddy_call(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+class ActivityPostCreate(BaseModel):
+    display_name: str = Field(min_length=1, max_length=40)
+    activity: str = Field(min_length=2, max_length=60)
+    city: str = Field(min_length=1, max_length=60)
+    area: str = Field(default="", max_length=60)
+    time_window: str = Field(default="", max_length=60)
+    vibe: str = Field(default="", max_length=40)
+    skill_level: str = Field(default="", max_length=20)
+    budget: str = Field(default="", max_length=20)
+    group_size: str = Field(default="", max_length=20)
+    notes: str = Field(default="", max_length=280)
+    active: bool = True
+
+
+class ActivityPostUpdate(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1, max_length=40)
+    activity: str | None = Field(default=None, min_length=2, max_length=60)
+    city: str | None = Field(default=None, min_length=1, max_length=60)
+    area: str | None = Field(default=None, max_length=60)
+    time_window: str | None = Field(default=None, max_length=60)
+    vibe: str | None = Field(default=None, max_length=40)
+    skill_level: str | None = Field(default=None, max_length=20)
+    budget: str | None = Field(default=None, max_length=20)
+    group_size: str | None = Field(default=None, max_length=20)
+    notes: str | None = Field(default=None, max_length=280)
+    active: bool | None = None
+
+
+class BuddyRequestCreate(BaseModel):
+    message: str = Field(default="", max_length=280)
+    requester_name: str = Field(default="", max_length=40)
+
+
+class BuddyRequestDecision(BaseModel):
+    status: str = Field(pattern=r"^(accepted|rejected)$")
+
+
+class BuddyReport(BaseModel):
+    reason: str = Field(default="", max_length=280)
+
+
+@app.post("/activity-posts")
+async def create_activity_post(req: ActivityPostCreate, response: Response,
+                               ident: Identity = Depends()) -> dict:
+    user_id, new_session = ident.resolve()
+    _set_session(response, new_session)
+    return {"post": _buddy_call(buddies.create_post, user_id, req.model_dump()),
+            "safety_note": buddies.SAFETY_NOTE}
+
+
+@app.get("/activity-posts")
+async def search_activity_posts(response: Response, ident: Identity = Depends(),
+                                activity: str | None = None, city: str | None = None,
+                                time_window: str | None = None,
+                                skill_level: str | None = None,
+                                budget: str | None = None, vibe: str | None = None,
+                                include_own: bool = False) -> dict:
+    user_id, new_session = ident.resolve()
+    _set_session(response, new_session)
+    posts = buddies.search_posts(user_id, activity=activity, city=city,
+                                 time_window=time_window, skill_level=skill_level,
+                                 budget=budget, vibe=vibe, include_own=include_own)
+    return {"posts": posts, "safety_note": buddies.SAFETY_NOTE}
+
+
+@app.get("/activity-posts/mine")
+async def my_activity_posts(response: Response, ident: Identity = Depends()) -> dict:
+    user_id, new_session = ident.resolve()
+    _set_session(response, new_session)
+    return {"posts": buddies.my_posts(user_id)}
+
+
+@app.patch("/activity-posts/{post_id}")
+async def update_activity_post(post_id: int, req: ActivityPostUpdate,
+                               response: Response, ident: Identity = Depends()) -> dict:
+    user_id, new_session = ident.resolve()
+    _set_session(response, new_session)
+    return {"post": _buddy_call(buddies.update_post, user_id, post_id,
+                                req.model_dump(exclude_unset=True))}
+
+
+@app.post("/activity-posts/{post_id}/request")
+async def request_to_join(post_id: int, req: BuddyRequestCreate,
+                          response: Response, ident: Identity = Depends()) -> dict:
+    user_id, new_session = ident.resolve()
+    _set_session(response, new_session)
+    result = _buddy_call(buddies.create_request, user_id, post_id,
+                         req.message, req.requester_name)
+    return {"request": result, "safety_note": buddies.SAFETY_NOTE}
+
+
+@app.get("/activity-requests/mine")
+async def my_activity_requests(response: Response, ident: Identity = Depends()) -> dict:
+    user_id, new_session = ident.resolve()
+    _set_session(response, new_session)
+    return buddies.my_requests(user_id)
+
+
+@app.patch("/activity-requests/{request_id}")
+async def decide_activity_request(request_id: int, req: BuddyRequestDecision,
+                                  response: Response,
+                                  ident: Identity = Depends()) -> dict:
+    user_id, new_session = ident.resolve()
+    _set_session(response, new_session)
+    return {"request": _buddy_call(buddies.decide_request, user_id,
+                                   request_id, req.status)}
+
+
+@app.post("/activity-posts/{post_id}/report")
+async def report_activity_post(post_id: int, req: BuddyReport, response: Response,
+                               ident: Identity = Depends()) -> dict:
+    user_id, new_session = ident.resolve()
+    _set_session(response, new_session)
+    return _buddy_call(buddies.report_post, user_id, post_id, req.reason)
+
+
+@app.post("/users/{public_user_key}/block")
+async def block_buddy_user(public_user_key: str, response: Response,
+                           ident: Identity = Depends()) -> dict:
+    user_id, new_session = ident.resolve()
+    _set_session(response, new_session)
+    return _buddy_call(buddies.block_user, user_id, public_user_key)
 
 
 if settings().debug_endpoints:  # route does not exist unless explicitly enabled

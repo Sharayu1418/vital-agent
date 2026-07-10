@@ -375,6 +375,109 @@ button.ghost-danger:hover { border-color: var(--danger); }
 
 /* ---------- responsive ---------- */
 
+/* ---------- activity buddies ---------- */
+
+.bud-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.bud-actions button {
+  font-size: 12px; padding: 5px 11px; border-radius: 999px;
+  border: 1px solid var(--glass-border); background: var(--glass);
+  transition: all 0.15s;
+}
+.bud-actions button:hover { border-color: var(--accent); }
+
+.bud-mine-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 5px 0; font-size: 13px;
+}
+.bud-mine-what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bud-mine-what em { color: var(--amber); font-style: normal; font-size: 12px; }
+.bud-toggle {
+  font-size: 11px; padding: 2px 10px; border-radius: 999px;
+  border: 1px solid var(--glass-border); color: var(--muted); flex-shrink: 0;
+}
+.bud-toggle.on { border-color: var(--accent); color: var(--accent); }
+
+.bud-overlay {
+  position: fixed; inset: 0; z-index: 60; background: rgba(8, 8, 14, 0.55);
+  display: flex; align-items: center; justify-content: center; padding: 18px;
+}
+.bud-modal {
+  width: min(520px, 100%); max-height: min(640px, 90dvh); overflow-y: auto;
+  background: var(--glass-strong); border: 1px solid var(--glass-border);
+  border-radius: 20px; padding: 16px; box-shadow: var(--shadow);
+}
+@supports (backdrop-filter: blur(1px)) {
+  .bud-modal { backdrop-filter: blur(22px) saturate(1.5);
+               -webkit-backdrop-filter: blur(22px) saturate(1.5); }
+}
+.bud-modal-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 12px;
+}
+.bud-tabs { display: flex; gap: 6px; }
+.bud-tabs button {
+  font-size: 12.5px; padding: 5px 13px; border-radius: 999px;
+  border: 1px solid var(--glass-border); color: var(--muted);
+}
+.bud-tabs button.on { border-color: var(--accent); color: var(--accent);
+  background: var(--accent-soft); }
+
+.bud-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.bud-form > .bud-field-wide, .bud-form > .bud-safety,
+.bud-form > .bud-note, .bud-form > button { grid-column: 1 / -1; }
+.bud-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.bud-field span { color: var(--muted); }
+.bud-field input, .bud-field select, .bud-field textarea,
+.bud-search-row input, .bud-card-actions input {
+  background: var(--glass); border: 1px solid var(--glass-border);
+  color: var(--text); border-radius: 10px; padding: 8px 10px;
+  font: inherit; font-size: 13px; outline: none; resize: vertical;
+}
+.bud-field input:focus, .bud-field select:focus, .bud-field textarea:focus,
+.bud-search-row input:focus { border-color: var(--accent); }
+.bud-field select option { background: #14182a; color: #eceef6; }
+[data-theme="light"] .bud-field select option { background: #fff; color: #2a2733; }
+
+.bud-search-row { display: flex; gap: 8px; margin-bottom: 10px; }
+.bud-search-row input { flex: 1; min-width: 0; }
+
+.bud-safety {
+  font-size: 11.5px; color: var(--amber); line-height: 1.45;
+  background: var(--glass); border: 1px solid var(--glass-border);
+  border-radius: 10px; padding: 8px 10px; margin: 8px 0;
+}
+.bud-note { font-size: 12px; color: var(--danger); margin: 4px 0; }
+
+.bud-card {
+  background: var(--glass); border: 1px solid var(--glass-border);
+  border-radius: 14px; padding: 11px 12px; margin: 8px 0;
+}
+.bud-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.bud-where { color: var(--muted); font-size: 12px; text-align: right; }
+.bud-activity { color: var(--accent); font-size: 13.5px; margin: 2px 0 4px; }
+.bud-chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 4px 0; }
+.bud-chips span {
+  font-size: 10.5px; padding: 2px 8px; border-radius: 999px;
+  background: var(--glass-strong); border: 1px solid var(--glass-border);
+  color: var(--muted);
+}
+.bud-notes { font-size: 12.5px; margin: 4px 0; }
+.bud-reasons { font-size: 11.5px; color: var(--accent-2); margin: 4px 0; }
+.bud-card-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; align-items: center; }
+.bud-card-actions input { flex: 1; min-width: 120px; font-size: 12px; padding: 6px 9px; }
+.bud-card-actions .primary { font-size: 12px; padding: 6px 13px; }
+.bud-minor {
+  font-size: 11.5px; color: var(--muted); padding: 5px 9px;
+  border-radius: 9px; border: 1px solid transparent;
+}
+.bud-minor:hover { border-color: var(--glass-border); color: var(--danger); }
+.bud-sent { font-size: 12px; color: var(--accent); }
+.bud-subhead { font-size: 12px; color: var(--muted); text-transform: uppercase;
+  letter-spacing: 0.05em; margin: 12px 0 4px; }
+.bud-status { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.bud-status-accepted { color: var(--accent); }
+.bud-status-rejected { color: var(--danger); }
+
 .scrim { position: fixed; inset: 0; background: rgba(8, 8, 14, 0.5); z-index: 40;
   backdrop-filter: blur(3px); }
 
@@ -399,6 +502,9 @@ button.ghost-danger:hover { border-color: var(--danger); }
   .sidebar.open { transform: none; }
   .hero { min-height: calc(100dvh - 190px); }
   .msg .bubble { max-width: 94%; }
+  .bud-form { grid-template-columns: 1fr; }
+  .bud-overlay { padding: 10px; align-items: flex-end; }
+  .bud-modal { max-height: 82dvh; }
 }
 
 @media (prefers-reduced-motion: reduce) {

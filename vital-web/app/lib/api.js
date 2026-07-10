@@ -31,4 +31,31 @@ export const api = {
   memories: () => fetch(`${API}/memories`, { credentials: "include" }),
   forget: (key) =>
     fetch(`${API}/memories/${key}`, { method: "DELETE", credentials: "include" }),
+
+  // ---- Activity Buddy Board ----
+  buddyCreate: (payload) =>
+    fetch(`${API}/activity-posts`, { method: "POST", credentials: "include",
+      headers: json, body: JSON.stringify(payload) }),
+  buddySearch: (queryString) =>
+    fetch(`${API}/activity-posts${queryString ? `?${queryString}` : ""}`,
+      { credentials: "include" }),
+  buddyMine: () => fetch(`${API}/activity-posts/mine`, { credentials: "include" }),
+  buddyUpdate: (postId, patch) =>
+    fetch(`${API}/activity-posts/${postId}`, { method: "PATCH", credentials: "include",
+      headers: json, body: JSON.stringify(patch) }),
+  buddyRequestJoin: (postId, message, requesterName) =>
+    fetch(`${API}/activity-posts/${postId}/request`, { method: "POST",
+      credentials: "include", headers: json,
+      body: JSON.stringify({ message, requester_name: requesterName }) }),
+  buddyRequests: () =>
+    fetch(`${API}/activity-requests/mine`, { credentials: "include" }),
+  buddyDecide: (requestId, status) =>
+    fetch(`${API}/activity-requests/${requestId}`, { method: "PATCH",
+      credentials: "include", headers: json, body: JSON.stringify({ status }) }),
+  buddyReport: (postId, reason) =>
+    fetch(`${API}/activity-posts/${postId}/report`, { method: "POST",
+      credentials: "include", headers: json, body: JSON.stringify({ reason }) }),
+  buddyBlock: (ownerKey) =>
+    fetch(`${API}/users/${ownerKey}/block`, { method: "POST",
+      credentials: "include", headers: json, body: JSON.stringify({}) }),
 };

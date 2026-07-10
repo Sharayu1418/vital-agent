@@ -1,6 +1,7 @@
 "use client";
 /* Live glance panel — WHOOP-style progressive disclosure: the top tier is
  * glanceable (score-ish numbers, tiny chart); depth lives in the chat. */
+import Buddies from "./Buddies";
 
 function SleepChart({ nights, targetMin }) {
   if (!nights?.length) return null;
@@ -75,6 +76,8 @@ export default function SidePanel({ sleep, events, memories, onForget, open, onC
             ))
           )}
         </section>
+
+        <Buddies />
 
         <section className="card">
           <h3>What VITAL knows</h3>
