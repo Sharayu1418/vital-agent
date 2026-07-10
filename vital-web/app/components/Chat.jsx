@@ -6,6 +6,10 @@ import {
   getRecognitionCtor, isSynthesisSupported, joinTranscript,
   recognitionErrorText, stripMarkdownForSpeech,
 } from "../lib/speech";
+import { dailyLine, firstNameFrom } from "../lib/theme";
+import {
+  MicIcon, SpeakerIcon, StopIcon, ThumbDownIcon, ThumbUpIcon,
+} from "./icons";
 
 // react-markdown is safe by default (no raw HTML). Links open in a new tab.
 const mdComponents = {
@@ -19,12 +23,38 @@ const STARTERS = [
   "Find people who are into bouldering",
 ];
 
-function greeting() {
+function greeting(name) {
   const h = new Date().getHours();
-  if (h >= 5 && h < 12) return { hi: "Good morning", line: "Where should today's energy go?" };
-  if (h < 17) return { hi: "Good afternoon", line: "Time for a reset, an idea, or a plan?" };
-  if (h < 22) return { hi: "Good evening", line: "How did today treat you?" };
-  return { hi: "Up late?", line: "Let's look after tomorrow-you." };
+  // "-" means the user skipped the name ask; greet warmly but namelessly
+  const who = name && name !== "-" ? `, ${name}` : "";
+  if (h >= 5 && h < 12) {
+    return { hi: `Good morning${who}`, line: "Where should today's energy go?" };
+  }
+  if (h < 17) {
+    return { hi: `Good afternoon${who}`, line: "Time for a reset, an idea, or a plan?" };
+  }
+  if (h < 22) {
+    return { hi: `Good evening${who}`, line: "How did today treat you?" };
+  }
+  return { hi: `Up late${who}?`, line: "Let's look after tomorrow-you." };
+}
+
+/* One-time, low-pressure name ask. Enter saves; "skip" never asks again. */
+function NameAsk({ onSaveName }) {
+  const [value, setValue] = useState("");
+  return (
+    <div className="name-ask rise">
+      <span>What should VITAL call you?</span>
+      <input value={value} maxLength={30} placeholder="First name"
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && firstNameFrom(value)) onSaveName(value);
+        }} />
+      <button className="name-save" disabled={!firstNameFrom(value)}
+        onClick={() => onSaveName(value)}>Save</button>
+      <button className="name-skip" onClick={() => onSaveName("")}>skip</button>
+    </div>
+  );
 }
 
 function Composer({ input, setInput, onSend, busy, hero = false }) {
@@ -72,7 +102,7 @@ function Composer({ input, setInput, onSend, busy, hero = false }) {
       rec.start();
       setListening(true);
     } catch {
-      setMicNote("Voice input hit a snag — try again.");
+      setMicNote("Voice input hit a snag. Try again.");
       recRef.current = null;
     }
   }
@@ -99,7 +129,7 @@ function Composer({ input, setInput, onSend, busy, hero = false }) {
             ? (listening ? "Stop listening" : "Speak instead of typing")
             : "Voice input is not supported in this browser."}
           disabled={!micSupported || busy}
-          onClick={toggleMic}>🎤</button>
+          onClick={toggleMic}><MicIcon /></button>
         <button className="send" aria-label="Send" disabled={busy || !input.trim()}
           onClick={() => send(input)}>↑</button>
       </div>
@@ -108,14 +138,17 @@ function Composer({ input, setInput, onSend, busy, hero = false }) {
   );
 }
 
-function Hero({ onStarter, nudge, input, setInput, onSend, busy }) {
-  const g = greeting();
+function Hero({ onStarter, nudge, input, setInput, onSend, busy, userName, onSaveName }) {
+  const g = greeting(userName);
   return (
     <div className="hero">
       <p className="hero-hi">{g.hi}</p>
       <h2 className="hero-title">{g.line}</h2>
+      <p className="hero-quote">{dailyLine()}</p>
 
       <Composer input={input} setInput={setInput} onSend={onSend} busy={busy} hero />
+
+      {userName === "" && <NameAsk onSaveName={onSaveName} />}
 
       {nudge && (
         nudge.prompt ? (
@@ -144,7 +177,7 @@ function Hero({ onStarter, nudge, input, setInput, onSend, busy }) {
 function PlanCard({ plan, editText, setEditText, onDecide, busy }) {
   return (
     <div className="plan-card rise">
-      <h3>Proposed plan — your call</h3>
+      <h3>Proposed plan. Your call</h3>
       {plan.items.map((it, i) => (
         <div className="plan-item" key={i}>
           <span className="when">{it.day} {it.start}–{it.end}</span>
@@ -172,7 +205,7 @@ function PlanCard({ plan, editText, setEditText, onDecide, busy }) {
 
 export default function Chat({
   messages, pendingPlan, busy, thinking, input, setInput, editText, setEditText,
-  onSend, onDecide, onRate, nudge, autoRead = false,
+  onSend, onDecide, onRate, nudge, autoRead = false, userName = null, onSaveName,
 }) {
   const bottomRef = useRef(null);
   const [ttsSupported, setTtsSupported] = useState(false);
@@ -227,7 +260,8 @@ export default function Chat({
         <div className="chat-col">
           {empty && (
             <Hero onStarter={onSend} nudge={nudge}
-              input={input} setInput={setInput} onSend={onSend} busy={busy} />
+              input={input} setInput={setInput} onSend={onSend} busy={busy}
+              userName={userName} onSaveName={onSaveName} />
           )}
 
           {messages.map((m, i) => (m.role === "ai" && !m.text && !m.status) ? null : (
@@ -245,13 +279,15 @@ export default function Chat({
                       aria-label={speakingId === (m.id ?? i) ? "Stop reading" : "Read aloud"}
                       title={speakingId === (m.id ?? i) ? "Stop reading" : "Read aloud"}
                       onClick={() => toggleSpeak(m.id ?? i, m.text)}>
-                      {speakingId === (m.id ?? i) ? "⏹" : "🔊"}
+                      {speakingId === (m.id ?? i) ? <StopIcon /> : <SpeakerIcon />}
                     </button>
                   )}
                   <button className={m.rated === "up" ? "chosen" : ""}
-                    onClick={() => onRate(i, "up")}>👍</button>
+                    aria-label="Good response"
+                    onClick={() => onRate(i, "up")}><ThumbUpIcon /></button>
                   <button className={m.rated === "down" ? "chosen" : ""}
-                    onClick={() => onRate(i, "down")}>👎</button>
+                    aria-label="Bad response"
+                    onClick={() => onRate(i, "down")}><ThumbDownIcon /></button>
                 </div>
               )}
             </div>
@@ -274,7 +310,7 @@ export default function Chat({
       {!empty && (
         <div className="composer">
           <Composer input={input} setInput={setInput} onSend={onSend} busy={busy} />
-          <p className="composer-hint">VITAL can make mistakes — plans always wait for your approval.</p>
+          <p className="composer-hint">VITAL can make mistakes. Plans always wait for your approval.</p>
         </div>
       )}
     </div>

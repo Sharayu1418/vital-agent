@@ -30,9 +30,9 @@ export function recognitionErrorText(code) {
   switch (code) {
     case "not-allowed":
     case "service-not-allowed":
-      return "Microphone access was denied — check your browser permissions.";
+      return "Microphone access was denied. Check your browser permissions.";
     case "no-speech":
-      return "No speech detected — try again.";
+      return "No speech detected. Try again.";
     case "audio-capture":
       return "No microphone found.";
     case "network":
@@ -40,7 +40,7 @@ export function recognitionErrorText(code) {
     case "aborted":
       return null;
     default:
-      return "Voice input hit a snag — try again.";
+      return "Voice input hit a snag. Try again.";
   }
 }
 

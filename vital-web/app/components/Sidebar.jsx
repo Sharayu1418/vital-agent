@@ -1,17 +1,15 @@
 "use client";
 
 export default function Sidebar({
-  threads, activeId, onSelect, onNew, onDelete, theme, onToggleTheme, open, onClose,
+  threads, activeId, onSelect, onNew, onDelete, open, onClose,
 }) {
   return (
     <>
       {open && <div className="scrim" onClick={onClose} />}
       <aside className={`sidebar ${open ? "open" : ""}`}>
         <div className="sidebar-head">
+          {/* theme follows the time of day; no manual toggle */}
           <span className="wordmark">VITAL<em>.</em></span>
-          <button className="icon-btn" title="Toggle theme" onClick={onToggleTheme}>
-            {theme === "dark" ? "☀️" : "🌙"}
-          </button>
         </div>
 
         <button className="new-chat" onClick={onNew}>+ New chat</button>

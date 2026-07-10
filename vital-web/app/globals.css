@@ -4,12 +4,13 @@
    Layout: sidebar | chat | live panel. */
 
 :root, [data-theme="dark"] {
-  /* night sky: deep navy up top, indigo, faint warm dawn at the horizon */
-  --sky: linear-gradient(180deg, #0a0e1a 0%, #10142a 45%, #1c1836 75%, #2b1e33 100%);
-  --sun: radial-gradient(60% 45% at 50% 108%, #b4552766 0%, #6b2d4a33 45%, transparent 75%);
-  --glass: rgba(18, 22, 36, 0.55);
-  --glass-strong: rgba(16, 20, 32, 0.78);
-  --glass-border: rgba(255, 255, 255, 0.09);
+  /* night sky: never flat black — navy lifting into indigo and plum, with
+     a faint warm dawn at the horizon so the dark mode has depth */
+  --sky: linear-gradient(180deg, #0c1124 0%, #131a38 40%, #1e1c42 70%, #302049 100%);
+  --sun: radial-gradient(60% 45% at 50% 108%, #b4552770 0%, #6b2d4a3d 45%, transparent 75%);
+  --glass: rgba(28, 34, 58, 0.5);
+  --glass-strong: rgba(24, 30, 52, 0.8);
+  --glass-border: rgba(165, 178, 255, 0.13);
   --text: #eceef6;
   --muted: #9aa3ba;
   --accent: #5fe0c2;
@@ -23,6 +24,9 @@
   --user-text: #10122a;
   --shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
   --radius: 18px;
+  /* solid surfaces for dialogs/sheets — translucency reads as broken there */
+  --surface: #1a2038;
+  --field: #232a4c;
 }
 
 [data-theme="light"] {
@@ -44,6 +48,8 @@
   --user-bubble: rgba(38, 36, 48, 0.85);
   --user-text: #f5f4f8;
   --shadow: 0 12px 40px rgba(80, 50, 30, 0.18);
+  --surface: #fbfaf8;
+  --field: #f0eef2;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -193,10 +199,12 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 
 .feedback-row { display: flex; gap: 6px; margin-left: 4px; }
 .feedback-row button {
-  padding: 2px 9px; font-size: 12px; border-radius: 9px;
+  padding: 2px 9px; font-size: 12px; border-radius: 9px; min-height: 24px;
+  display: inline-flex; align-items: center; justify-content: center;
   border: 1px solid var(--glass-border); background: var(--glass); opacity: 0.75;
   transition: all 0.15s;
 }
+.feedback-row button svg { width: 13px; height: 13px; }
 .feedback-row button:hover { opacity: 1; border-color: var(--accent); }
 .feedback-row button.chosen { border-color: var(--accent); color: var(--accent); opacity: 1; }
 
@@ -225,6 +233,12 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 }
 .hero-pill textarea { color: var(--pill-text) !important; font-size: 16.5px; }
 .hero-pill textarea::placeholder { color: rgba(240, 240, 245, 0.55); }
+.hero-pill:focus-within {
+  border-color: rgba(95, 224, 194, 0.5) !important;
+  box-shadow: 0 0 0 3px rgba(95, 224, 194, 0.16),
+              0 18px 60px rgba(95, 224, 194, 0.12),
+              inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
 .hero-pill .send { width: 44px; height: 44px; border-radius: 999px; font-size: 18px; }
 
 .nudge {
@@ -249,6 +263,43 @@ button.nudge:hover { border-color: var(--accent); transform: translateY(-1px); }
 }
 .starter-chip:hover { border-color: var(--accent); background: var(--accent-soft); transform: translateY(-1px); }
 .hero-foot { color: var(--muted); font-size: 12px; max-width: 420px; animation: rise 0.65s; }
+.hero-quote { color: var(--muted); font-size: 13.5px; font-style: italic;
+  margin-top: -8px; animation: rise 0.5s; }
+
+/* one-time name ask, pill-shaped and skippable */
+.name-ask {
+  display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  justify-content: center; font-size: 13px; color: var(--muted);
+  background: var(--glass); border: 1px solid var(--glass-border);
+  border-radius: 999px; padding: 7px 8px 7px 16px; box-shadow: var(--shadow);
+}
+.name-ask input {
+  width: 130px; background: var(--field); border: 1px solid var(--glass-border);
+  border-radius: 999px; padding: 6px 12px; color: var(--text);
+  font: inherit; font-size: 13px; outline: none; transition: border-color 0.2s;
+}
+.name-ask input:focus { border-color: var(--accent); }
+.name-save {
+  background: var(--accent); color: #06231c; border-radius: 999px;
+  padding: 6px 13px; font-size: 12.5px; font-weight: 650; transition: all 0.15s;
+}
+[data-theme="light"] .name-save { color: #fff; }
+.name-save:disabled { opacity: 0.45; }
+.name-skip { color: var(--muted); font-size: 12px; padding: 6px 8px; }
+.name-skip:hover { color: var(--text); }
+
+/* Apple-like press feedback: tapping shows the hover look plus a soft
+   scale-down, so touch users get the same "alive" response as pointers */
+.starter-chip:active, button.nudge:active, .icon-btn:active, .send:active,
+.mic:active, button.primary:active, .bud-actions button:active,
+.bud-tabs button:active, .bud-toggle:active, .new-chat:active,
+.name-save:active, .feedback-row button:active {
+  transform: scale(0.96); transition-duration: 0.06s;
+}
+.starter-chip:active, button.nudge:active, .icon-btn:active,
+.bud-actions button:active {
+  border-color: var(--accent); background: var(--accent-soft);
+}
 
 /* ---------- plan card ---------- */
 
@@ -300,7 +351,15 @@ button.ghost-danger:hover { border-color: var(--danger); }
   border-radius: 22px; padding: 8px; box-shadow: var(--shadow);
   transition: border-color 0.2s;
 }
-.composer-inner:focus-within { border-color: var(--accent); }
+/* the "lighting" nudge: tapping the input makes it visibly light up */
+.composer-inner { transition: border-color 0.25s, box-shadow 0.25s; }
+.composer-inner:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft), 0 8px 44px rgba(95, 224, 194, 0.10);
+}
+[data-theme="light"] .composer-inner:focus-within {
+  box-shadow: 0 0 0 3px var(--accent-soft), 0 8px 44px rgba(12, 138, 114, 0.12);
+}
 .composer textarea, .composer-inner textarea {
   flex: 1; background: none; border: none; resize: none; color: var(--text);
   font: inherit; padding: 9px 10px; max-height: 160px; outline: none;
@@ -317,7 +376,8 @@ button.ghost-danger:hover { border-color: var(--danger); }
 
 /* voice input */
 .mic {
-  width: 38px; height: 38px; border-radius: 13px; padding: 0; font-size: 15px;
+  width: 38px; height: 38px; border-radius: 13px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
   flex-shrink: 0; border: 1px solid var(--glass-border); background: var(--glass);
   transition: all 0.15s;
 }
@@ -397,46 +457,73 @@ button.ghost-danger:hover { border-color: var(--danger); }
 }
 .bud-toggle.on { border-color: var(--accent); color: var(--accent); }
 
+/* The dialog is portaled to <body> (the panel's backdrop-filter would trap
+ * position:fixed children). Solid surface, never translucent: forms over
+ * bleed-through content read as broken. Centered dialog on desktop; the
+ * mobile override below turns it into a bottom sheet. */
 .bud-overlay {
-  position: fixed; inset: 0; z-index: 60; background: rgba(8, 8, 14, 0.55);
-  display: flex; align-items: center; justify-content: center; padding: 18px;
-}
-.bud-modal {
-  width: min(520px, 100%); max-height: min(640px, 90dvh); overflow-y: auto;
-  background: var(--glass-strong); border: 1px solid var(--glass-border);
-  border-radius: 20px; padding: 16px; box-shadow: var(--shadow);
+  position: fixed; inset: 0; z-index: 100; background: rgba(8, 10, 20, 0.62);
+  display: flex; align-items: center; justify-content: center; padding: 20px;
 }
 @supports (backdrop-filter: blur(1px)) {
-  .bud-modal { backdrop-filter: blur(22px) saturate(1.5);
-               -webkit-backdrop-filter: blur(22px) saturate(1.5); }
+  .bud-overlay { backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
+}
+.bud-modal {
+  width: min(460px, 100%); max-height: min(680px, 88dvh);
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--surface); border: 1px solid var(--glass-border);
+  border-radius: 18px; box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+  animation: rise 0.25s cubic-bezier(0.2, 0.7, 0.3, 1);
 }
 .bud-modal-head {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 12px;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 12px 14px; border-bottom: 1px solid var(--glass-border); flex-shrink: 0;
 }
-.bud-tabs { display: flex; gap: 6px; }
-.bud-tabs button {
-  font-size: 12.5px; padding: 5px 13px; border-radius: 999px;
-  border: 1px solid var(--glass-border); color: var(--muted);
+.bud-modal-body { padding: 16px; overflow-y: auto; }
+.bud-title { font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
+.bud-sub { color: var(--muted); font-size: 12.5px; margin: 3px 0 14px; line-height: 1.5; }
+.bud-close {
+  width: 30px; height: 30px; border-radius: 10px; font-size: 17px; flex-shrink: 0;
+  color: var(--muted); border: 1px solid transparent;
+  display: inline-flex; align-items: center; justify-content: center;
 }
-.bud-tabs button.on { border-color: var(--accent); color: var(--accent);
-  background: var(--accent-soft); }
+.bud-close:hover { border-color: var(--glass-border); color: var(--text); }
 
-.bud-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+/* tabs as a segmented control */
+.bud-tabs {
+  display: flex; gap: 2px; padding: 3px; border-radius: 999px;
+  background: var(--glass); border: 1px solid var(--glass-border);
+}
+.bud-tabs button {
+  font-size: 12.5px; padding: 5px 14px; border-radius: 999px;
+  color: var(--muted); transition: all 0.15s;
+}
+.bud-tabs button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+.bud-form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .bud-form > .bud-field-wide, .bud-form > .bud-safety,
-.bud-form > .bud-note, .bud-form > button { grid-column: 1 / -1; }
-.bud-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
-.bud-field span { color: var(--muted); }
+.bud-form > .bud-note, .bud-form > .bud-submit { grid-column: 1 / -1; }
+.bud-field { display: flex; flex-direction: column; gap: 5px; font-size: 12px; }
+.bud-field span { color: var(--muted); font-weight: 550; }
+.bud-req { color: var(--amber); font-style: normal; font-weight: 400; font-size: 11px; }
 .bud-field input, .bud-field select, .bud-field textarea,
 .bud-search-row input, .bud-card-actions input {
-  background: var(--glass); border: 1px solid var(--glass-border);
-  color: var(--text); border-radius: 10px; padding: 8px 10px;
-  font: inherit; font-size: 13px; outline: none; resize: vertical;
+  background: var(--field); border: 1px solid var(--glass-border);
+  color: var(--text); border-radius: 11px; padding: 9px 11px;
+  font: inherit; font-size: 13.5px; outline: none; resize: vertical;
+  transition: border-color 0.15s;
 }
 .bud-field input:focus, .bud-field select:focus, .bud-field textarea:focus,
-.bud-search-row input:focus { border-color: var(--accent); }
-.bud-field select option { background: #14182a; color: #eceef6; }
-[data-theme="light"] .bud-field select option { background: #fff; color: #2a2733; }
+.bud-search-row input:focus, .bud-card-actions input:focus {
+  border-color: var(--accent);
+}
+.bud-field select { appearance: none; -webkit-appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+                    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 17px) 50%, calc(100% - 12px) 50%;
+  background-size: 5px 5px; background-repeat: no-repeat; padding-right: 30px; }
+.bud-field select option { background: var(--surface); color: var(--text); }
+.bud-submit { width: 100%; padding: 11px; border-radius: 12px; font-size: 14px; }
 
 .bud-search-row { display: flex; gap: 8px; margin-bottom: 10px; }
 .bud-search-row input { flex: 1; min-width: 0; }
@@ -502,12 +589,23 @@ button.ghost-danger:hover { border-color: var(--danger); }
   .sidebar.open { transform: none; }
   .hero { min-height: calc(100dvh - 190px); }
   .msg .bubble { max-width: 94%; }
-  .bud-form { grid-template-columns: 1fr; }
-  .bud-overlay { padding: 10px; align-items: flex-end; }
-  .bud-modal { max-height: 82dvh; }
+  /* bottom sheet on small screens: full width, rounded top, slides up */
+  .bud-overlay { padding: 0; align-items: flex-end; }
+  .bud-modal {
+    width: 100%; max-height: 88dvh; border-radius: 18px 18px 0 0;
+    border-left: none; border-right: none; border-bottom: none;
+    animation: sheet-up 0.28s cubic-bezier(0.2, 0.7, 0.3, 1);
+  }
+  .bud-modal-body { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
+}
+
+@keyframes sheet-up {
+  from { transform: translateY(40px); opacity: 0.4; }
+  to { transform: none; opacity: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .rise, .hero-hi, .hero-title, .hero-pill, .nudge, .starter-row, .hero-foot { animation: none; }
+  .rise, .hero-hi, .hero-title, .hero-pill, .nudge, .starter-row, .hero-foot,
+  .bud-modal { animation: none; }
   * { transition: none !important; }
 }

@@ -1,8 +1,15 @@
 "use client";
 /* Activity Buddy Board — opt-in "find people to do things with".
  * Deliberately NOT a dating-app feel: compact cards, approximate areas only,
- * request-to-join instead of DMs, safety copy where people browse. */
+ * request-to-join instead of DMs, safety copy where people browse.
+ *
+ * The dialog renders through a portal to <body>: the side panel uses
+ * backdrop-filter, which turns it into the containing block for
+ * position:fixed children — without the portal the dialog gets trapped
+ * and clipped inside the panel. Centered dialog on desktop, bottom sheet
+ * on small screens (see globals.css). */
 import { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { api } from "../lib/api";
 import {
@@ -22,12 +29,27 @@ const LABELS = {
   notes: "Notes",
 };
 
+const TABS = [
+  { id: "create", label: "Post" },
+  { id: "browse", label: "Browse" },
+  { id: "requests", label: "Requests" },
+];
+
+const HEADINGS = {
+  create: ["Create a buddy post",
+    "Say what you want to do and roughly where. People nearby can ask to join."],
+  browse: ["Find buddies",
+    "Search by activity and city. You decide who joins."],
+  requests: ["Requests",
+    "Approve people for your posts, and track the ones you sent."],
+};
+
 function Select({ field, value, onChange, options }) {
   return (
     <label className="bud-field">
       <span>{LABELS[field]}</span>
       <select value={value} onChange={(e) => onChange(field, e.target.value)}>
-        <option value="">—</option>
+        <option value="">No preference</option>
         {options.map((o) => <option key={o} value={o}>{o}</option>)}
       </select>
     </label>
@@ -38,7 +60,7 @@ function Input({ field, value, onChange, placeholder = "" }) {
   const required = REQUIRED_FIELDS.includes(field);
   return (
     <label className="bud-field">
-      <span>{LABELS[field]}{required ? " *" : ""}</span>
+      <span>{LABELS[field]}{required && <em className="bud-req"> required</em>}</span>
       <input value={value} placeholder={placeholder}
         onChange={(e) => onChange(field, e.target.value)} />
     </label>
@@ -65,7 +87,7 @@ function CreateForm({ onCreated }) {
         onCreated();
       }
     } catch {
-      setNote("Can't reach the backend — try again in a moment.");
+      setNote("Can't reach the backend. Try again in a moment.");
     } finally {
       setBusy(false);
     }
@@ -74,9 +96,9 @@ function CreateForm({ onCreated }) {
   return (
     <div className="bud-form">
       <Input field="display_name" value={form.display_name} onChange={set}
-        placeholder="How you'll appear — no real name needed" />
+        placeholder="How you'll appear. No real name needed" />
       <Input field="activity" value={form.activity} onChange={set}
-        placeholder="swimming, bouldering, pottery…" />
+        placeholder="swimming, bouldering, pottery" />
       <Input field="city" value={form.city} onChange={set} placeholder="Albany" />
       <Input field="area" value={form.area} onChange={set} placeholder="Guilderland" />
       <Select field="time_window" value={form.time_window} onChange={set} options={TIME_WINDOWS} />
@@ -87,12 +109,12 @@ function CreateForm({ onCreated }) {
       <label className="bud-field bud-field-wide">
         <span>{LABELS.notes}</span>
         <textarea rows={2} value={form.notes} maxLength={280}
-          placeholder="Anything else — this is public, so no exact addresses or contact details"
+          placeholder="Anything else? This is public, so no exact addresses or contact details"
           onChange={(e) => set("notes", e.target.value)} />
       </label>
       <p className="bud-safety">{SAFETY_NOTE}</p>
       {note && <p className="bud-note">{note}</p>}
-      <button className="primary" disabled={busy} onClick={submit}>
+      <button className="primary bud-submit" disabled={busy} onClick={submit}>
         {busy ? "Posting…" : "Publish buddy post"}
       </button>
     </div>
@@ -123,7 +145,7 @@ function MatchCard({ post, onBlocked }) {
   async function report() {
     if (!window.confirm("Report this post to VITAL?")) return;
     await api.buddyReport(p.id, "reported from buddy board").catch(() => {});
-    setState("Reported — thank you.");
+    setState("Reported. Thank you.");
   }
 
   async function block() {
@@ -190,7 +212,7 @@ function Browse() {
   return (
     <div>
       <div className="bud-search-row">
-        <input placeholder="Activity (e.g. swimming)" value={filters.activity}
+        <input placeholder="Activity, like swimming" value={filters.activity}
           onChange={(e) => setFilters((f) => ({ ...f, activity: e.target.value }))}
           onKeyDown={(e) => e.key === "Enter" && search()} />
         <input placeholder="City" value={filters.city}
@@ -201,7 +223,7 @@ function Browse() {
       <p className="bud-safety">{SAFETY_NOTE}</p>
       {note && <p className="bud-note">{note}</p>}
       {results?.length === 0 && (
-        <p className="side-hint">No buddies match yet — publish a post so
+        <p className="side-hint">No buddies match yet. Publish a post so
           they can find you instead.</p>
       )}
       {results?.map((post) => <MatchCard key={post.id} post={post} onBlocked={search} />)}
@@ -263,6 +285,14 @@ export default function Buddies() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
+  // the dialog owns the screen while open; Esc closes it
+  useEffect(() => {
+    if (!view) return undefined;
+    const onKey = (e) => { if (e.key === "Escape") setView(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [view]);
+
   async function toggleActive(post) {
     await api.buddyUpdate(post.id, { active: !post.active }).catch(() => {});
     refresh();
@@ -274,13 +304,14 @@ export default function Buddies() {
   }
 
   const pending = (requests.incoming ?? []).filter((q) => q.status === "pending").length;
+  const [title, subtitle] = view ? HEADINGS[view] : ["", ""];
 
   return (
     <section className="card">
       <h3>Activity Buddies</h3>
       {mine.length === 0 ? (
-        <p className="side-hint">Opt in to find people for shared activities —
-          others see only what you choose to post, under a display name you
+        <p className="side-hint">Opt in to find people for shared activities.
+          Others see only what you choose to post, under a display name you
           pick. Early feature: posts live in prototype storage and may reset
           when the app is updated.</p>
       ) : (
@@ -290,7 +321,7 @@ export default function Buddies() {
               {p.pending_requests > 0 && <em> · {p.pending_requests} pending</em>}
             </span>
             <button className={`bud-toggle ${p.active ? "on" : ""}`}
-              title={p.active ? "Visible in search — click to hide" : "Hidden — click to show"}
+              title={p.active ? "Visible in search. Click to hide" : "Hidden. Click to show"}
               onClick={() => toggleActive(p)}>{p.active ? "active" : "paused"}</button>
           </div>
         ))
@@ -305,29 +336,33 @@ export default function Buddies() {
         </button>
       </div>
 
-      {view && (
+      {view && typeof document !== "undefined" && createPortal(
         <div className="bud-overlay" onClick={() => setView(null)}>
-          <div className="bud-modal" onClick={(e) => e.stopPropagation()}>
+          <div className="bud-modal" role="dialog" aria-modal="true"
+            aria-label={title} onClick={(e) => e.stopPropagation()}>
             <div className="bud-modal-head">
-              <div className="bud-tabs">
-                {["create", "browse", "requests"].map((v) => (
-                  <button key={v} className={view === v ? "on" : ""}
-                    onClick={() => setView(v)}>
-                    {v === "create" ? "Post" : v === "browse" ? "Browse" : "Requests"}
-                  </button>
+              <div className="bud-tabs" role="tablist">
+                {TABS.map((t) => (
+                  <button key={t.id} role="tab" aria-selected={view === t.id}
+                    className={view === t.id ? "on" : ""}
+                    onClick={() => setView(t.id)}>{t.label}</button>
                 ))}
               </div>
-              <button className="icon-btn" aria-label="Close"
+              <button className="bud-close" aria-label="Close"
                 onClick={() => setView(null)}>×</button>
             </div>
-            {view === "create" && (
-              <CreateForm onCreated={() => { refresh(); setView(null); }} />
-            )}
-            {view === "browse" && <Browse />}
-            {view === "requests" && <Requests requests={requests} onDecide={decide} />}
+            <div className="bud-modal-body">
+              <h4 className="bud-title">{title}</h4>
+              <p className="bud-sub">{subtitle}</p>
+              {view === "create" && (
+                <CreateForm onCreated={() => { refresh(); setView(null); }} />
+              )}
+              {view === "browse" && <Browse />}
+              {view === "requests" && <Requests requests={requests} onDecide={decide} />}
+            </div>
           </div>
-        </div>
-      )}
+        </div>,
+        document.body)}
     </section>
   );
 }

@@ -42,7 +42,7 @@ export default function SidePanel({ sleep, events, memories, onForget, open, onC
         <section className="card">
           <h3>Sleep</h3>
           {nights.length === 0 ? (
-            <p className="side-hint">No data yet — upload a sleep file or just
+            <p className="side-hint">No data yet. Upload a sleep file or just
               tell VITAL how you slept.</p>
           ) : (
             <>
@@ -82,8 +82,8 @@ export default function SidePanel({ sleep, events, memories, onForget, open, onC
         <section className="card">
           <h3>What VITAL knows</h3>
           {!memories?.length ? (
-            <p className="side-hint">It learns stable facts as you chat —
-              visible and deletable, always.</p>
+            <p className="side-hint">It learns stable facts as you chat.
+              Visible and deletable, always.</p>
           ) : (
             memories.map((m) => (
               <div className="memory-row" key={m.key}>

@@ -5,15 +5,17 @@
 import { useCallback, useEffect, useState } from "react";
 
 import Chat from "./components/Chat";
+import { MenuIcon, MoonIcon, SpeakerIcon, UploadIcon } from "./components/icons";
 import Sidebar from "./components/Sidebar";
 import SidePanel from "./components/SidePanel";
 import { api } from "./lib/api";
 import { isSynthesisSupported } from "./lib/speech";
 import { applyEvent, initialStream, shouldKeepBubble, sseEvents } from "./lib/stream";
+import { firstNameFrom, themeForHour } from "./lib/theme";
 import { loadThreads, newThread, renameIfNew, saveThreads, uid } from "./lib/threads";
 
 export default function Home() {
-  const [theme, setTheme] = useState("dark");
+  const [userName, setUserName] = useState(null); // null = not loaded yet
   const [threads, setThreads] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -32,10 +34,14 @@ export default function Home() {
 
   // ---- boot: theme + threads + panel data ----
   useEffect(() => {
-    const savedTheme = localStorage.getItem("vital_theme") || "dark";
-    setTheme(savedTheme);
-    document.documentElement.dataset.theme = savedTheme;
+    // theme follows the clock (no toggle): sunrise mornings, night otherwise;
+    // re-checked every few minutes so it flips while the tab stays open
+    const applyTheme = () =>
+      (document.documentElement.dataset.theme = themeForHour(new Date().getHours()));
+    applyTheme();
+    const themeTimer = setInterval(applyTheme, 5 * 60 * 1000);
 
+    setUserName(localStorage.getItem("vital_name") ?? "");
     setTtsAvailable(isSynthesisSupported());
     setAutoRead(localStorage.getItem("vital_read_aloud") === "1");
 
@@ -45,6 +51,7 @@ export default function Home() {
     setActiveId(list[0].id);
     refreshPanel();
     loadHistory(list[0].id);
+    return () => clearInterval(themeTimer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -54,11 +61,10 @@ export default function Home() {
     localStorage.setItem("vital_read_aloud", next ? "1" : "0");
   }
 
-  function toggleTheme() {
-    const next = theme === "dark" ? "light" : "dark";
-    setTheme(next);
-    document.documentElement.dataset.theme = next;
-    localStorage.setItem("vital_theme", next);
+  function saveName(raw) {
+    const name = firstNameFrom(raw);
+    setUserName(name || "-");        // "-" = asked and skipped; never ask again
+    localStorage.setItem("vital_name", name || "-");
   }
 
   const refreshPanel = useCallback(async () => {
@@ -166,7 +172,7 @@ export default function Home() {
       }
     } catch {
       setMessages((m) => [...m, { id: uid(), role: "ai",
-        text: "Can't reach the backend — is it running?" }]);
+        text: "Can't reach the backend. Is it running?" }]);
     } finally {
       setBusy(false);
       setThinking(false);
@@ -199,7 +205,7 @@ export default function Home() {
     const r = await api.upload(file).catch(() => null);
     if (!r) {
       setMessages((m) => [...m, { id: uid(), role: "ai",
-        text: "Upload failed — can't reach the backend." }]);
+        text: "Upload failed. Can't reach the backend." }]);
       return;
     }
     const body = await r.json().catch(() => ({}));
@@ -225,17 +231,17 @@ export default function Home() {
   // Human-centric nudge: one gentle, data-aware pull toward the next action
   function nudgeFor() {
     if (!sleep?.nights?.length) {
-      return { text: "Tip: upload your sleep data (⬆ top right) and VITAL can analyze your real nights" };
+      return { text: "Tip: upload your sleep data (top right) and VITAL can analyze your real nights" };
     }
     const target = sleep.target_min ?? 480;
     const debtH = sleep.nights
       .reduce((a, n) => a + Math.max(0, target - n.duration_min), 0) / 60;
     if (debtH >= 2) {
-      return { text: `You're ${debtH.toFixed(1)}h behind on sleep this week — ask what to do about it`,
+      return { text: `You're ${debtH.toFixed(1)}h behind on sleep this week. Ask what to do about it`,
                prompt: "What should I do about my sleep debt this week?" };
     }
     if (!events?.length) {
-      return { text: "Nothing on your plan yet — want a weekend built around your energy?",
+      return { text: "Nothing on your plan yet. Want a weekend built around your energy?",
                prompt: "Plan my weekend around my energy levels" };
     }
     return null;
@@ -245,12 +251,12 @@ export default function Home() {
     <div className="app">
       <Sidebar threads={threads} activeId={activeId}
         onSelect={selectThread} onNew={createThread} onDelete={deleteThread}
-        theme={theme} onToggleTheme={toggleTheme}
         open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
       <main className="main">
         <header className="topbar">
-          <button className="icon-btn only-mobile" onClick={() => setSidebarOpen(true)}>☰</button>
+          <button className="icon-btn only-mobile" aria-label="Open menu"
+            onClick={() => setSidebarOpen(true)}><MenuIcon /></button>
           <span className="topbar-title">
             {threads.find((t) => t.id === activeId)?.title ?? "VITAL"}
           </span>
@@ -259,14 +265,15 @@ export default function Home() {
               <button className={`icon-btn ${autoRead ? "active" : ""}`}
                 aria-pressed={autoRead}
                 title={autoRead ? "Read replies aloud: on" : "Read replies aloud: off"}
-                onClick={toggleAutoRead}>🔊</button>
+                onClick={toggleAutoRead}><SpeakerIcon /></button>
             )}
             <label className="icon-btn" title="Upload sleep data (CSV or Apple Health XML)">
-              ⬆
+              <UploadIcon />
               <input type="file" accept=".csv,.xml" hidden
                 onChange={(e) => e.target.files[0] && upload(e.target.files[0])} />
             </label>
-            <button className="icon-btn only-mobile" onClick={() => setPanelOpen(true)}>☾</button>
+            <button className="icon-btn only-mobile" aria-label="Open panel"
+              onClick={() => setPanelOpen(true)}><MoonIcon /></button>
           </div>
         </header>
 
@@ -274,7 +281,7 @@ export default function Home() {
           thinking={thinking} input={input} setInput={setInput}
           editText={editText} setEditText={setEditText}
           onSend={send} onDecide={decide} onRate={rate} nudge={nudgeFor()}
-          autoRead={autoRead} />
+          autoRead={autoRead} userName={userName} onSaveName={saveName} />
       </main>
 
       <SidePanel sleep={sleep} events={events} memories={memories}

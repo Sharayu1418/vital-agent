@@ -32,10 +32,10 @@ PUBLIC_FIELDS = ("id", "display_name", "activity", "city", "area", "time_window"
 # Honest copy: area/notes ARE public (that's the point of a board), so say
 # exactly what is visible instead of promising location privacy we can't
 # fully enforce — the scrubber below is a backstop, not a guarantee.
-SAFETY_NOTE = ("Meet in public places and tell someone where you're going. Only "
-               "the city, area, and notes you choose to post are visible — don't "
-               "include exact addresses or contact details (VITAL removes any it "
-               "spots).")
+SAFETY_NOTE = ("Meet in public places and tell someone where you're going. "
+               "Others can see the city, area, and notes you post, so please "
+               "don't include exact addresses or contact details. VITAL "
+               "removes any it spots.")
 
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 # 7+ digits with optional separators — catches phone numbers without eating

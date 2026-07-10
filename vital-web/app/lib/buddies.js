@@ -60,6 +60,6 @@ export function searchQuery(filters) {
  * the board. Don't promise location privacy; tell people what not to post.
  * Keep in sync with SAFETY_NOTE in vital-app/src/vital/buddies.py. */
 export const SAFETY_NOTE =
-  "Meet in public places and tell someone where you're going. Only the city, " +
-  "area, and notes you choose to post are visible — don't include exact " +
-  "addresses or contact details (VITAL removes any it spots).";
+  "Meet in public places and tell someone where you're going. Others can see " +
+  "the city, area, and notes you post, so please don't include exact " +
+  "addresses or contact details. VITAL removes any it spots.";
