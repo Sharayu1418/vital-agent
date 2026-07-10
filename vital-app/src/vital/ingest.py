@@ -1,17 +1,20 @@
-"""Health data ingestion: Apple Health XML export or plain CSV → one
-normalized per-user sleep.csv the analysis sandbox can rely on.
+"""Health data ingestion: Apple Health XML export or plain CSV → normalized
+per-user sleep rows in the shared app store (Postgres in prod, SQLite in
+dev — container disk is ephemeral on Cloud Run, so files are out).
 
 Normalized schema (the ONLY schema analysis code ever sees — D6 applied
 to the user's own data): date, duration_min, quality, source
+
+The analysis sandbox still consumes CSV bytes; sleep_csv_bytes() renders
+them from the database on demand.
 """
 import csv
 import io
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from datetime import datetime
-from pathlib import Path
 
-from vital.config import settings
+from vital import storage
 from vital.storage import compute_duration_min
 
 HEADER = ["date", "duration_min", "quality", "source"]
@@ -76,36 +79,27 @@ def parse_apple_health_xml(content: bytes) -> list[dict]:
     return rows
 
 
-def _user_dir(user_id: str) -> Path:
-    d = Path(settings().data_dir) / user_id
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+def save_sleep_data(user_id: str, rows: list[dict]) -> int:
+    """Merge-by-date with existing data (new upload wins on conflicts).
+    Returns the number of rows written."""
+    return storage.save_health_rows(user_id, rows)
 
 
-def save_sleep_data(user_id: str, rows: list[dict]) -> Path:
-    """Merge-by-date with existing data (new upload wins on conflicts)."""
-    path = _user_dir(user_id) / "sleep.csv"
-    merged: dict[str, dict] = {}
-    if path.exists():
-        with path.open() as f:
-            for row in csv.DictReader(f):
-                merged[row["date"]] = row
-    for row in rows:
-        merged[row["date"]] = {k: str(v) for k, v in row.items()}
-    with path.open("w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=HEADER)
-        writer.writeheader()
-        writer.writerows([merged[d] for d in sorted(merged)])
-    return path
+def sleep_csv_bytes(user_id: str) -> bytes | None:
+    """The user's uploaded sleep data rendered as normalized CSV bytes
+    (what the analysis sandbox consumes), or None if nothing is uploaded."""
+    rows = storage.health_rows(user_id)
+    if not rows:
+        return None
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=HEADER)
+    writer.writeheader()
+    writer.writerows(rows)
+    return buf.getvalue().encode()
 
 
-def user_sleep_csv(user_id: str) -> Path | None:
-    path = Path(settings().data_dir) / user_id / "sleep.csv"
-    return path if path.exists() else None
-
-
-def csv_preview(path: Path, rows: int = 6) -> str:
+def csv_preview(data: bytes, rows: int = 6) -> str:
     """First rows as text — injected into code-gen prompts so the model
     writes against columns that actually exist (Phase 2 pitfall #1)."""
-    with path.open() as f:
-        return "".join(line for _, line in zip(range(rows + 1), f))
+    lines = data.decode().splitlines(keepends=True)
+    return "".join(lines[:rows + 1])

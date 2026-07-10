@@ -10,6 +10,15 @@ os.environ.setdefault("OPENWEATHER_API_KEY", "test")
 os.environ.setdefault("GOOGLE_PLACES_API_KEY", "test")
 os.environ.setdefault("SESSION_COOKIE_SECURE", "false")
 
+# A developer's real .env must never leak into tests. pydantic-settings
+# falls back to the env FILE only when a variable is absent from the
+# environment — so pin these HERE, at import time, before any module-level
+# settings() call (api.py registers /debug routes at import).
+os.environ["API_AUTH_TOKEN"] = ""
+os.environ["DEBUG_ENDPOINTS"] = "false"
+os.environ["DATABASE_URL"] = ""
+os.environ["TICKETMASTER_API_KEY"] = ""
+
 import pytest
 
 
@@ -18,7 +27,6 @@ def isolated_storage(tmp_path, monkeypatch):
     from vital.config import settings
     settings.cache_clear()
     monkeypatch.setenv("SQLITE_PATH", str(tmp_path / "test.db"))
-    monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     # pydantic-settings also reads the repo's real .env — a developer's
     # API_AUTH_TOKEN / DEBUG_ENDPOINTS / DATABASE_URL there must never
     # change test behavior. Env vars override env_file, so pin safe values.

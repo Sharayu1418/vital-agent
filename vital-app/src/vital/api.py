@@ -21,7 +21,7 @@ from vital.config import settings
 from vital.graph import build_graph_async, close_graph_resources
 from vital.security import (SESSION_COOKIE, caller_is_trusted,
                             resolve_identity, validate_startup)
-from vital.storage import current_user_id
+from vital.storage import close_storage, current_user_id, initialize_storage
 
 graph = None
 
@@ -29,12 +29,19 @@ graph = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global graph
-    validate_startup()  # fail closed before serving anything
-    graph = await build_graph_async()
+    validate_startup()      # fail closed before serving anything
+    initialize_storage()    # pool + tables now, or the deploy fails here
+    # graph build lives INSIDE the try, and cleanup is nested, so the pool
+    # closes even when graph startup or graph cleanup raises
     try:
+        graph = await build_graph_async()
         yield
     finally:
-        await close_graph_resources()
+        try:
+            if graph is not None:
+                await close_graph_resources()
+        finally:
+            close_storage()
 
 
 app = FastAPI(title="VITAL", version="0.5.0", lifespan=lifespan)
@@ -302,8 +309,6 @@ async def upload_health(file: UploadFile, response: Response,
 async def sleep_recent(response: Response, ident: Identity = Depends()) -> dict:
     """Last 14 nights, merging manual logs with uploaded data (upload wins
     on date conflicts) — feeds the side-panel trend chart."""
-    import csv as _csv
-
     user_id, new_session = ident.resolve()
     current_user_id.set(user_id)  # sleep_history reads the contextvar —
     # without this it returns whoever's identity was set last (P1 bug)
@@ -313,14 +318,11 @@ async def sleep_recent(response: Response, ident: Identity = Depends()) -> dict:
         nights[row["log_date"]] = {"date": row["log_date"],
                                    "duration_min": row["duration_min"],
                                    "quality": row["quality"], "source": "manual"}
-    path = ingest.user_sleep_csv(user_id)
-    if path:
-        with path.open() as f:
-            for row in _csv.DictReader(f):
-                nights[row["date"]] = {"date": row["date"],
-                                       "duration_min": int(row["duration_min"]),
-                                       "quality": row.get("quality") or None,
-                                       "source": row.get("source", "upload")}
+    for row in storage.health_rows(user_id):
+        nights[row["date"]] = {"date": row["date"],
+                               "duration_min": int(row["duration_min"]),
+                               "quality": row["quality"] or None,
+                               "source": row["source"] or "upload"}
     ordered = sorted(nights.values(), key=lambda n: n["date"])[-14:]
     return {"nights": ordered, "target_min": 480}
 

@@ -92,7 +92,9 @@ def test_resolve_identity_rejects_forged_cookie():
 
 def test_startup_refuses_debug_without_token(monkeypatch):
     monkeypatch.setenv("DEBUG_ENDPOINTS", "true")
-    monkeypatch.delenv("API_AUTH_TOKEN", raising=False)
+    # blank (not delenv): deleting would let pydantic fall back to a
+    # developer's real .env, and a token there would mask the failure
+    monkeypatch.setenv("API_AUTH_TOKEN", "")
     settings.cache_clear()
     with pytest.raises(RuntimeError):
         security.validate_startup()
@@ -191,10 +193,8 @@ def test_memories_route_reuses_existing_session(monkeypatch):
     assert client.cookies[security.SESSION_COOKIE] == session
 
 
-def test_upload_and_chat_share_anonymous_identity(monkeypatch, tmp_path):
+def test_upload_and_chat_share_anonymous_identity(monkeypatch):
     # end-to-end P1 scenario: anonymous upload → same session chats → same user_id
-    monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
-    settings.cache_clear()
     client, fake = _client(monkeypatch)
     up = client.post("/upload/health",
                      files={"file": ("sleep.csv", b"date,duration_min\n2026-07-01,420\n")})
@@ -371,8 +371,9 @@ def test_debug_routes_exist_and_require_token_when_enabled(monkeypatch):
     assert client.get("/debug/state/u/t").status_code == 401          # no token
     # (with the token it would proceed to graph.get_state — covered manually)
 
-    # restore module to default (debug off) so test order can't leak state
-    monkeypatch.delenv("DEBUG_ENDPOINTS")
-    monkeypatch.delenv("API_AUTH_TOKEN")
+    # restore module to default (debug off) so test order can't leak state;
+    # blank values (not delenv) keep a dev's real .env out of the reload
+    monkeypatch.setenv("DEBUG_ENDPOINTS", "false")
+    monkeypatch.setenv("API_AUTH_TOKEN", "")
     settings.cache_clear()
     importlib.reload(api)

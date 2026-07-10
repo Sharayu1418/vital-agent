@@ -326,8 +326,7 @@ export default function Buddies() {
       {mine.length === 0 ? (
         <p className="side-hint">Opt in to find people for shared activities.
           Others see only what you choose to post, under a display name you
-          pick. Early feature: posts live in prototype storage and may reset
-          when the app is updated.</p>
+          pick. Early feature, so expect a few rough edges.</p>
       ) : (
         mine.map((p) => (
           <div className="bud-mine-row" key={p.id}>

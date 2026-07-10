@@ -39,13 +39,13 @@ def analyze_sleep_data(question: str) -> str:
     from vital import ingest
     from vital.analysis import run_analysis
 
-    path = ingest.user_sleep_csv(storage.current_user_id.get())
-    if path is None:
+    data = ingest.sleep_csv_bytes(storage.current_user_id.get())
+    if data is None:
         return ("no uploaded sleep data — the user can upload an Apple Health "
                 "export or CSV at /upload/health, or you can use "
                 "get_sleep_history for manually logged nights")
     try:
-        return run_analysis(question, path.read_bytes(), ingest.csv_preview(path))
+        return run_analysis(question, data, ingest.csv_preview(data))
     except Exception as exc:  # E2B key/quota/timeout, Vertex errors, ...
         # infra failure must degrade the answer, not kill the conversation (D6 policy)
         return ("analysis temporarily unavailable "

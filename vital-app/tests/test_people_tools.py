@@ -22,7 +22,8 @@ def fresh_settings():
 
 
 def test_events_without_key_reports_not_configured(monkeypatch):
-    monkeypatch.delenv("TICKETMASTER_API_KEY", raising=False)
+    # blank, not delenv — deleting would let pydantic read a dev's real .env
+    monkeypatch.setenv("TICKETMASTER_API_KEY", "")
     out = search_events.invoke({"interest": "pottery", "city": "Brooklyn"})
     assert "error" in out and "not configured" in out["error"]
 

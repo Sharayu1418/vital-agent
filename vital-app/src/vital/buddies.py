@@ -14,10 +14,9 @@ Design (mirrors the rest of the app):
 - Matching is deterministic scoring (no embeddings): activity and city
   filter, the softer preferences (time window, skill, budget, vibe) rank.
 
-Persistence caveat (prototype): buddy tables live in the app-specific
-SQLite store (``/tmp/vital.db`` on Cloud Run), like feedback/calendar data.
-Posts and requests can reset on redeploys or instance restarts until the
-app tables migrate to Postgres — the UI says so; don't overclaim.
+Persistence: buddy tables live in the shared app store (vital.storage) —
+Cloud SQL Postgres when DATABASE_URL is set, SQLite for local dev. Durable
+in production; nothing here may assume container-local disk.
 """
 import hashlib
 import re
@@ -98,7 +97,7 @@ def create_post(user_id: str, fields: dict) -> dict:
         raise ValueError(f"required fields are blank: {', '.join(blank)}")
     now = _now()
     with _conn() as c:
-        cur = c.execute(
+        post_id = c.insert_id(
             """INSERT INTO activity_posts
                (user_id, display_name, activity, city, area, time_window, vibe,
                 skill_level, budget, group_size, notes, active, created_at, updated_at)
@@ -107,7 +106,6 @@ def create_post(user_id: str, fields: dict) -> dict:
              clean["area"], clean["time_window"], clean["vibe"], clean["skill_level"],
              clean["budget"], clean["group_size"], clean["notes"],
              int(bool(fields.get("active", True))), now, now))
-        post_id = cur.lastrowid
     return get_own_post(user_id, post_id)
 
 
@@ -285,13 +283,12 @@ def create_request(user_id: str, post_id: int, message: str = "",
             "requester_user_id = ? AND status = 'pending'", (post_id, user_id)).fetchone()
         if dup:
             raise ValueError("you already have a pending request for this post")
-        cur = c.execute(
+        req_id = c.insert_id(
             """INSERT INTO activity_requests
                (post_id, requester_user_id, requester_name, message, status,
                 created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)""",
             (post_id, user_id, scrub_contact_info(requester_name) or "A VITAL member",
              scrub_contact_info(message), now, now))
-        req_id = cur.lastrowid
     return {"id": req_id, "post_id": post_id, "status": "pending"}
 
 
@@ -349,6 +346,7 @@ def block_user(user_id: str, blocked_key: str) -> dict:
     if blocked_key == public_user_key(user_id):
         raise ValueError("you can't block yourself")
     with _conn() as c:
-        c.execute("INSERT OR IGNORE INTO user_blocks VALUES (?, ?, ?)",
+        c.execute("INSERT INTO user_blocks VALUES (?, ?, ?) "
+                  "ON CONFLICT (user_id, blocked_key) DO NOTHING",
                   (user_id, blocked_key, _now()))
     return {"blocked": blocked_key}

@@ -19,7 +19,9 @@ class Settings(BaseSettings):
     # Tool adapter timeouts — external APIs must never hang the agent loop
     tool_timeout_seconds: float = 8.0
 
-    # Storage (D2): SQLite locally; set DATABASE_URL for Postgres checkpoints
+    # Storage (D2): one relational store for everything. DATABASE_URL set →
+    # Postgres carries checkpoints, memories, AND all app tables (sleep,
+    # uploads, feedback, calendar, buddies, usage). Unset → SQLite locally.
     sqlite_path: str = "vital.db"
     database_url: str | None = None
 
@@ -42,7 +44,8 @@ class Settings(BaseSettings):
     e2b_api_key: str | None = None       # from e2b.dev; free tier for dev
     sandbox_timeout_seconds: float = 30.0
     max_repair_attempts: int = 3
-    data_dir: str = "data"               # per-user uploaded health data (GCS in prod)
+    # uploaded health data lives in the shared relational store (storage.py);
+    # container disk is ephemeral on Cloud Run, so no DATA_DIR anymore
     memory_recall_limit: int = 5
 
     # --- Phase 3: events provider (free key: developer.ticketmaster.com) ---
