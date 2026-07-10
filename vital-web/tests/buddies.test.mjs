@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  REQUIRED_FIELDS, SAFE_CARD_FIELDS, buildPostPayload, safeCard, searchQuery,
+  REQUIRED_FIELDS, SAFE_CARD_FIELDS, SAFETY_LINE, SAFETY_NOTE,
+  buildPostPayload, safeCard, searchQuery,
 } from "../app/lib/buddies.js";
 
 // ---- payload shaping ----
@@ -80,6 +81,18 @@ test("searchQuery includes only non-empty filters", () => {
     "activity=swimming&vibe=casual");
   assert.equal(searchQuery({}), "");
   assert.equal(searchQuery(undefined), "");
+});
+
+// ---- safety copy ----
+
+test("safety copy stays honest, compact, and human", () => {
+  for (const copy of [SAFETY_LINE, SAFETY_NOTE]) {
+    assert.match(copy, /public/i);                  // meet-in-public guidance
+    assert.match(copy, /address/i);                 // no exact addresses
+    assert.ok(!copy.includes("—"), "no long dashes in user-facing copy");
+    assert.ok(!/mile|radius|km\b/i.test(copy), "never implies distance math");
+  }
+  assert.ok(SAFETY_LINE.length < 90, "form line is a one-liner, not a block");
 });
 
 test("searchQuery encodes unsafe characters", () => {

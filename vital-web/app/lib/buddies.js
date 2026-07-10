@@ -63,3 +63,9 @@ export const SAFETY_NOTE =
   "Meet in public places and tell someone where you're going. Others can see " +
   "the city, area, and notes you post, so please don't include exact " +
   "addresses or contact details. VITAL removes any it spots.";
+
+/* Compact one-liner for the create form (NN/g: keep hints short and visible,
+ * not a giant warning block). The longer SAFETY_NOTE stays where people
+ * browse strangers' posts. */
+export const SAFETY_LINE =
+  "Public post. Meet in public and don't share exact addresses or contact info.";

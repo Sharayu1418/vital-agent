@@ -13,8 +13,8 @@ import { createPortal } from "react-dom";
 
 import { api } from "../lib/api";
 import {
-  BUDGETS, GROUP_SIZES, REQUIRED_FIELDS, SAFETY_NOTE, SKILLS, TIME_WINDOWS,
-  VIBES, buildPostPayload, safeCard, searchQuery,
+  BUDGETS, GROUP_SIZES, REQUIRED_FIELDS, SAFETY_LINE, SAFETY_NOTE, SKILLS,
+  TIME_WINDOWS, VIBES, buildPostPayload, safeCard, searchQuery,
 } from "../lib/buddies";
 
 const EMPTY_FORM = {
@@ -24,7 +24,7 @@ const EMPTY_FORM = {
 
 const LABELS = {
   display_name: "Display name", activity: "Activity", city: "City",
-  area: "Area (approximate)", time_window: "When", vibe: "Vibe",
+  area: "Neighborhood / area", time_window: "When", vibe: "Vibe",
   skill_level: "Skill level", budget: "Budget", group_size: "Group size",
   notes: "Notes",
 };
@@ -36,8 +36,8 @@ const TABS = [
 ];
 
 const HEADINGS = {
-  create: ["Create a buddy post",
-    "Say what you want to do and roughly where. People nearby can ask to join."],
+  create: ["Post a plan",
+    "Say what you want to do and roughly where."],
   browse: ["Find buddies",
     "Search by activity and city. You decide who joins."],
   requests: ["Requests",
@@ -56,13 +56,14 @@ function Select({ field, value, onChange, options }) {
   );
 }
 
-function Input({ field, value, onChange, placeholder = "" }) {
+function Input({ field, value, onChange, placeholder = "", hint = null }) {
   const required = REQUIRED_FIELDS.includes(field);
   return (
     <label className="bud-field">
       <span>{LABELS[field]}{required && <em className="bud-req"> required</em>}</span>
       <input value={value} placeholder={placeholder}
         onChange={(e) => onChange(field, e.target.value)} />
+      {hint && <small className="bud-hint">{hint}</small>}
     </label>
   );
 }
@@ -71,6 +72,8 @@ function CreateForm({ onCreated }) {
   const [form, setForm] = useState(EMPTY_FORM);
   const [note, setNote] = useState(null);
   const [busy, setBusy] = useState(false);
+  // progressive disclosure (NN/g): four key fields first, the rest on request
+  const [details, setDetails] = useState(false);
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
   async function submit() {
@@ -96,27 +99,38 @@ function CreateForm({ onCreated }) {
   return (
     <div className="bud-form">
       <Input field="display_name" value={form.display_name} onChange={set}
-        placeholder="How you'll appear. No real name needed" />
+        placeholder="Swim Sam" />
       <Input field="activity" value={form.activity} onChange={set}
-        placeholder="swimming, bouldering, pottery" />
+        placeholder="Swimming" />
       <Input field="city" value={form.city} onChange={set} placeholder="Albany" />
-      <Input field="area" value={form.area} onChange={set} placeholder="Guilderland" />
-      <Select field="time_window" value={form.time_window} onChange={set} options={TIME_WINDOWS} />
-      <Select field="vibe" value={form.vibe} onChange={set} options={VIBES} />
-      <Select field="skill_level" value={form.skill_level} onChange={set} options={SKILLS} />
-      <Select field="budget" value={form.budget} onChange={set} options={BUDGETS} />
-      <Select field="group_size" value={form.group_size} onChange={set} options={GROUP_SIZES} />
-      <label className="bud-field bud-field-wide">
-        <span>{LABELS.notes}</span>
-        <textarea rows={2} value={form.notes} maxLength={280}
-          placeholder="Anything else? This is public, so no exact addresses or contact details"
-          onChange={(e) => set("notes", e.target.value)} />
-      </label>
-      <p className="bud-safety">{SAFETY_NOTE}</p>
+      <Input field="area" value={form.area} onChange={set} placeholder="Guilderland"
+        hint="Part of town, not an address" />
+
+      {!details ? (
+        <button type="button" className="bud-disclose"
+          onClick={() => setDetails(true)}>+ Add details</button>
+      ) : (
+        <>
+          <Select field="time_window" value={form.time_window} onChange={set} options={TIME_WINDOWS} />
+          <Select field="vibe" value={form.vibe} onChange={set} options={VIBES} />
+          <Select field="skill_level" value={form.skill_level} onChange={set} options={SKILLS} />
+          <Select field="budget" value={form.budget} onChange={set} options={BUDGETS} />
+          <Select field="group_size" value={form.group_size} onChange={set} options={GROUP_SIZES} />
+          <label className="bud-field bud-field-wide">
+            <span>{LABELS.notes}</span>
+            <textarea rows={2} value={form.notes} maxLength={280}
+              placeholder="Optional note"
+              onChange={(e) => set("notes", e.target.value)} />
+            <small className="bud-hint">Public. No exact addresses or contact info.</small>
+          </label>
+        </>
+      )}
+
       {note && <p className="bud-note">{note}</p>}
       <button className="primary bud-submit" disabled={busy} onClick={submit}>
-        {busy ? "Posting…" : "Publish buddy post"}
+        {busy ? "Posting…" : "Post"}
       </button>
+      <p className="bud-safety">{SAFETY_LINE}</p>
     </div>
   );
 }
