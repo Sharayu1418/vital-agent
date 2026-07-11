@@ -52,3 +52,25 @@ export function renameIfNew(list, id, firstMessage) {
   return list.map((t) =>
     t.id === id && t.title === "New chat" ? { ...t, title: titleFrom(firstMessage) } : t);
 }
+
+/* Merge the server thread index (signed-in, cross-device) with the local
+ * list. Server rows win on title for the same id; local-only threads are
+ * kept (they may predate sign-in on this device). Sorted newest-activity
+ * first. Server rows are the caller's own by construction — the backend
+ * scopes them to the resolved identity. */
+export function mergeThreads(local, server) {
+  const merged = new Map();
+  for (const t of local) merged.set(t.id, { ...t });
+  for (const s of server) {
+    const at = Date.parse(s.updated_at || s.created_at) || Date.now();
+    merged.set(s.thread_id, {
+      id: s.thread_id,
+      title: s.title || "New chat",
+      createdAt: Date.parse(s.created_at) || at,
+      activeAt: at,
+    });
+  }
+  return [...merged.values()]
+    .sort((a, b) => (b.activeAt || b.createdAt || 0) - (a.activeAt || a.createdAt || 0))
+    .slice(0, 50);
+}

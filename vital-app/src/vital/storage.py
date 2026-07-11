@@ -92,6 +92,21 @@ CREATE TABLE IF NOT EXISTS activity_reports (
     post_id INTEGER NOT NULL, reporter_user_id TEXT NOT NULL,
     reason TEXT, created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS auth_identities (
+    provider TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    user_id TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (provider, subject)
+);
+CREATE TABLE IF NOT EXISTS user_threads (
+    user_id TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, thread_id)
+);
 """
 
 
@@ -214,6 +229,105 @@ def close_storage() -> None:
     if cfg.database_url and _pg_pool.cache_info().currsize:
         _pg_pool(cfg.database_url).close()
         _pg_pool.cache_clear()
+
+
+# ---------- external auth identities (Firebase Google Sign-In) ----------
+# 'subject' is the Firebase UID (never email). Everything else in the app
+# keys off the INTERNAL user_id, so no other table changes shape.
+
+def resolve_external_identity(provider: str, subject: str,
+                              candidate_anonymous_user_id: str | None) -> str:
+    """Stable internal user_id for an external (provider, subject).
+
+    - Existing mapping → its stored user_id.
+    - First sign-in → claims the server-resolved anonymous identity (so the
+      browser's pre-sign-in data follows the account), unless that identity
+      is already claimed by some other subject; otherwise a fresh internal
+      id is minted. The candidate is server-derived — clients never pick it.
+    - Concurrency-safe: UNIQUE(user_id) makes a double-claim impossible at
+      the database level; the claim INSERT uses a TARGETLESS
+      ``ON CONFLICT DO NOTHING`` so losing either race — same (provider,
+      subject) inserted twice, or the candidate user_id taken by another
+      subject a microsecond earlier — is silently absorbed, and the read
+      back decides what actually happened. Two subjects racing for one
+      anonymous identity: exactly one wins it, the other gets a fresh id.
+    """
+    from datetime import datetime, timezone
+    import uuid as _uuid
+
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as c:
+        row = c.execute("SELECT user_id FROM auth_identities "
+                        "WHERE provider = ? AND subject = ?",
+                        (provider, subject)).fetchone()
+        if row:
+            return row["user_id"]
+        if candidate_anonymous_user_id:
+            # the WHERE NOT EXISTS guard skips obviously-taken candidates;
+            # the unique index + targetless DO NOTHING handles the raced case
+            c.execute(
+                """INSERT INTO auth_identities (provider, subject, user_id, created_at)
+                   SELECT ?, ?, ?, ?
+                   WHERE NOT EXISTS (SELECT 1 FROM auth_identities WHERE user_id = ?)
+                   ON CONFLICT DO NOTHING""",
+                (provider, subject, candidate_anonymous_user_id, now,
+                 candidate_anonymous_user_id))
+        row = c.execute("SELECT user_id FROM auth_identities "
+                        "WHERE provider = ? AND subject = ?",
+                        (provider, subject)).fetchone()
+        if row:
+            return row["user_id"]
+        fresh = f"usr-{_uuid.uuid4().hex}"
+        c.execute("INSERT INTO auth_identities VALUES (?, ?, ?, ?) "
+                  "ON CONFLICT DO NOTHING",
+                  (provider, subject, fresh, now))
+        row = c.execute("SELECT user_id FROM auth_identities "
+                        "WHERE provider = ? AND subject = ?",
+                        (provider, subject)).fetchone()
+        return row["user_id"]
+
+
+def user_id_is_linked(user_id: str) -> bool:
+    """True if this internal id belongs to a signed-in account — an
+    anonymous session must never keep resolving to it (see security.py)."""
+    with _conn() as c:
+        row = c.execute("SELECT 1 FROM auth_identities WHERE user_id = ?",
+                        (user_id,)).fetchone()
+    return row is not None
+
+
+# ---------- user thread index (cross-device thread list for signed-in users;
+# ---------- messages themselves live in the checkpointer) ----------
+
+def upsert_user_thread(user_id: str, thread_id: str, title_hint: str) -> None:
+    """Insert keeps the first title; later messages only bump updated_at."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    title = " ".join(title_hint.split())[:60] or "New chat"
+    with _conn() as c:
+        c.execute(
+            """INSERT INTO user_threads VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT (user_id, thread_id) DO UPDATE SET
+                 updated_at = excluded.updated_at""",
+            (user_id, thread_id, title, now, now))
+
+
+def delete_user_thread(user_id: str, thread_id: str) -> None:
+    """Removes ONE row from the caller's own sidebar index. This UNLISTS
+    the thread — checkpointer conversation state is not touched, and the
+    thread reappears only if the user chats on the same id again."""
+    with _conn() as c:
+        c.execute("DELETE FROM user_threads WHERE user_id = ? AND thread_id = ?",
+                  (user_id, thread_id))
+
+
+def user_threads(user_id: str, limit: int = 100) -> list[dict]:
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT thread_id, title, created_at, updated_at FROM user_threads "
+            "WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?",
+            (user_id, limit)).fetchall()
+    return [dict(r) for r in rows]
 
 
 def compute_duration_min(bedtime: str, wake_time: str) -> int:

@@ -29,16 +29,26 @@ def fresh_settings():
 
 # ---------- Layer 1: unit ----------
 
-def test_no_token_configured_means_anonymous():
+def test_no_header_means_anonymous():
     assert security.caller_is_trusted(None) is False
-    assert security.caller_is_trusted("Bearer anything") is False
+
+
+def test_unmatchable_bearer_is_401_never_anonymous():
+    # Firebase-auth change: a PRESENT bearer that matches nothing is a hard
+    # 401 — silently downgrading a broken client to a fresh anonymous
+    # identity would hide misconfiguration and split the user's data
+    with pytest.raises(HTTPException) as exc:
+        security.caller_is_trusted("Bearer anything")
+    assert exc.value.status_code == 401
 
 
 def test_blank_token_is_treated_as_unconfigured(monkeypatch):
     monkeypatch.setenv("API_AUTH_TOKEN", "   ")
     settings.cache_clear()
     assert security.configured_token() is None
-    assert security.caller_is_trusted("Bearer    ") is False  # can't match blank
+    with pytest.raises(HTTPException) as exc:  # can't match blank → 401
+        security.caller_is_trusted("Bearer    ")
+    assert exc.value.status_code == 401
 
 
 def test_wrong_token_is_hard_401(monkeypatch):
@@ -69,23 +79,27 @@ def test_missing_header_with_token_configured_is_anonymous_not_401(monkeypatch):
     assert security.caller_is_trusted(None) is False
 
 
+INTERNAL = security.AuthContext("internal")
+ANON = security.AuthContext("anon")
+
+
 def test_resolve_identity_trusted_passthrough():
-    assert security.resolve_identity("alice", True, None) == ("alice", None)
+    assert security.resolve_identity("alice", INTERNAL, None) == ("alice", None)
 
 
 def test_resolve_identity_anonymous_gets_fresh_server_session():
-    user_id, new_session = security.resolve_identity("alice", False, None)
+    user_id, new_session = security.resolve_identity("alice", ANON, None)
     assert new_session is not None and len(new_session) == 32
     assert user_id == f"anon-{new_session}"  # body user_id 'alice' ignored
 
 
 def test_resolve_identity_valid_cookie_is_stable():
     session = "a" * 32
-    assert security.resolve_identity("x", False, session) == (f"anon-{session}", None)
+    assert security.resolve_identity("x", ANON, session) == (f"anon-{session}", None)
 
 
 def test_resolve_identity_rejects_forged_cookie():
-    user_id, new_session = security.resolve_identity("x", False, "../local-user")
+    user_id, new_session = security.resolve_identity("x", ANON, "../local-user")
     assert new_session is not None  # forged format → fresh session, not adopted
     assert "local-user" not in user_id
 

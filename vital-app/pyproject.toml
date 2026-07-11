@@ -15,6 +15,7 @@ dependencies = [
     "pydantic-settings>=2.6",
     "e2b-code-interpreter>=1.0",
     "python-multipart>=0.0.18",
+    "firebase-admin>=6.5",
 ]
 
 [project.optional-dependencies]

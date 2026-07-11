@@ -19,8 +19,9 @@ from sse_starlette.sse import EventSourceResponse
 from vital import buddies, guardrails, ingest, memory, metrics, storage
 from vital.config import settings
 from vital.graph import build_graph_async, close_graph_resources
-from vital.security import (SESSION_COOKIE, caller_is_trusted,
-                            resolve_identity, validate_startup)
+from vital.security import (SESSION_COOKIE, AuthContext, authenticate,
+                            caller_is_trusted, resolve_identity,
+                            validate_startup)
 from vital.storage import close_storage, current_user_id, initialize_storage
 
 graph = None
@@ -93,6 +94,20 @@ def _set_session(response: Response, new_session: str | None) -> None:
         response.headers["X-Vital-Session"] = new_session
 
 
+class Identity:
+    """Dependency bundle: verified auth context + session transport
+    (cookie OR mobile header). Every identity-resolving route uses this —
+    one path, no per-route drift."""
+    def __init__(self, auth: AuthContext = Depends(authenticate),
+                 vital_session: str | None = Cookie(default=None),
+                 x_vital_session: str | None = Header(default=None)):
+        self.auth = auth
+        self.session = vital_session or x_vital_session
+
+    def resolve(self, req_user_id: str = "local-user") -> tuple[str, str | None]:
+        return resolve_identity(req_user_id, self.auth, self.session)
+
+
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
     thread_id: str = Field(default="demo", max_length=64, pattern=r"^[\w-]+$")
@@ -102,6 +117,19 @@ class ChatRequest(BaseModel):
 @app.get("/healthz")
 async def healthz() -> dict:
     return {"status": "ok"}
+
+
+@app.post("/auth/logout")
+async def logout(response: Response) -> dict:
+    """Server-side half of sign-out: expire the anonymous session cookie so
+    the browser doesn't keep an identity that may have been linked to the
+    account. (The frontend clears Firebase + local state; security does NOT
+    depend on it — resolve_identity rejects linked anonymous sessions.)"""
+    cfg = settings()
+    response.set_cookie(SESSION_COOKIE, "", max_age=0, httponly=True,
+                        secure=cfg.session_cookie_secure,
+                        samesite=cfg.session_cookie_samesite)
+    return {"signed_out": True}
 
 
 # nodes whose model output is machinery (routing decisions, plan JSON,
@@ -202,15 +230,13 @@ def _graph_stream(graph_input, config, user_id: str):
 
 
 @app.post("/chat")
-async def chat(
-    req: ChatRequest,
-    trusted: bool = Depends(caller_is_trusted),
-    vital_session: str | None = Cookie(default=None),
-    x_vital_session: str | None = Header(default=None),
-) -> EventSourceResponse:
-    user_id, new_session = resolve_identity(req.user_id, trusted,
-                                            vital_session or x_vital_session)
+async def chat(req: ChatRequest, ident: Identity = Depends()) -> EventSourceResponse:
+    user_id, new_session = ident.resolve(req.user_id)
     current_user_id.set(user_id)  # tools read identity from here, never from the LLM
+    if ident.auth.kind == "firebase":
+        # signed-in users get a cross-device thread index (title = first
+        # message; later turns only bump updated_at)
+        storage.upsert_user_thread(user_id, req.thread_id, req.message)
 
     # Guardrail 1: crisis messages bypass the agent pipeline entirely —
     # deterministic path, no routing, no tools, no LLM dependency.
@@ -243,18 +269,13 @@ class ApprovalRequest(BaseModel):
 
 
 @app.post("/approve")
-async def approve(
-    req: ApprovalRequest,
-    trusted: bool = Depends(caller_is_trusted),
-    vital_session: str | None = Cookie(default=None),
-    x_vital_session: str | None = Header(default=None),
-) -> EventSourceResponse:
+async def approve(req: ApprovalRequest,
+                  ident: Identity = Depends()) -> EventSourceResponse:
     """Resume a paused plan-approval interrupt. The resume value reaches
     request_approval() exactly where interrupt() returned."""
     from langgraph.types import Command as ResumeCommand
 
-    user_id, new_session = resolve_identity(req.user_id, trusted,
-                                            vital_session or x_vital_session)
+    user_id, new_session = ident.resolve(req.user_id)
     current_user_id.set(user_id)
     # budget applies here too: an 'edit' resume re-invokes the planner LLM,
     # so /approve must not be a budget bypass (Phase 4 review finding)
@@ -267,18 +288,6 @@ async def approve(
     response = EventSourceResponse(_graph_stream(resume, config, user_id))
     _set_session(response, new_session)
     return response
-
-
-class Identity:
-    """Dependency bundle: resolved user_id + session (cookie OR mobile header)."""
-    def __init__(self, trusted: bool = Depends(caller_is_trusted),
-                 vital_session: str | None = Cookie(default=None),
-                 x_vital_session: str | None = Header(default=None)):
-        self.trusted = trusted
-        self.session = vital_session or x_vital_session
-
-    def resolve(self, req_user_id: str = "local-user") -> tuple[str, str | None]:
-        return resolve_identity(req_user_id, self.trusted, self.session)
 
 
 @app.post("/upload/health")
@@ -333,6 +342,34 @@ async def calendar_view(response: Response, ident: Identity = Depends()) -> dict
     user_id, new_session = ident.resolve()
     _set_session(response, new_session)
     return {"events": storage.calendar_events(user_id)}
+
+
+@app.get("/threads")
+async def list_threads(response: Response, ident: Identity = Depends()) -> dict:
+    """Thread index for the resolved identity — signed-in users get their
+    list on any device. Never exposes user ids; only the caller's own rows.
+    (Old anonymous-device thread ids can't be safely claimed by an account
+    after the fact — there is no ownership proof — so they are NOT imported;
+    the browser that created them keeps them in localStorage.)"""
+    user_id, new_session = ident.resolve()
+    _set_session(response, new_session)
+    return {"threads": storage.user_threads(user_id)}
+
+
+@app.delete("/threads/{thread_id}")
+async def delete_thread(thread_id: str, response: Response,
+                        ident: Identity = Depends()) -> dict:
+    """Remove a thread from the CALLER'S sidebar index (user_threads is
+    keyed by the server-resolved identity, so one user can never unlist
+    another's row). This does NOT erase conversation checkpoints — it's
+    'remove from list', not 'delete all data'; erasing graph state is a
+    separate, heavier operation."""
+    if not thread_id.replace("-", "").replace("_", "").isalnum() or len(thread_id) > 64:
+        raise HTTPException(status_code=422, detail="invalid thread id")
+    user_id, new_session = ident.resolve()
+    _set_session(response, new_session)
+    storage.delete_user_thread(user_id, thread_id)
+    return {"removed": thread_id}
 
 
 @app.get("/threads/{thread_id}/messages")

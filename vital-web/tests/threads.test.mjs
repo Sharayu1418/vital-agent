@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  loadThreads, newThread, renameIfNew, saveThreads, titleFrom,
+  loadThreads, mergeThreads, newThread, renameIfNew, saveThreads, titleFrom,
 } from "../app/lib/threads.js";
 
 function fakeStorage(initial = {}) {
@@ -53,4 +53,43 @@ test("saveThreads caps the list at 50", () => {
   const s = fakeStorage();
   saveThreads(Array.from({ length: 80 }, () => newThread()), s);
   assert.equal(loadThreads(s).length, 50);
+});
+
+// ---- signed-in cross-device merge ----
+
+const serverRow = (id, title, at) => ({
+  thread_id: id, title, created_at: at, updated_at: at,
+});
+
+test("server thread metadata merges over the local list", () => {
+  const local = [
+    { id: "t1", title: "Local title", createdAt: 1000 },
+    { id: "t2", title: "Local only", createdAt: 2000 },
+  ];
+  const merged = mergeThreads(local, [
+    serverRow("t1", "Server title", "2026-07-09T10:00:00Z"),
+    serverRow("t3", "Other device", "2026-07-10T10:00:00Z"),
+  ]);
+  const byId = Object.fromEntries(merged.map((t) => [t.id, t]));
+  assert.equal(byId.t1.title, "Server title");   // server wins on conflicts
+  assert.equal(byId.t2.title, "Local only");     // local-only kept
+  assert.equal(byId.t3.title, "Other device");   // cross-device row appears
+  assert.equal(merged.length, 3);                // no duplicates
+});
+
+test("merge sorts newest activity first and caps the list", () => {
+  const many = Array.from({ length: 60 }, (_, i) =>
+    serverRow(`s${i}`, `S${i}`, new Date(2026, 0, i + 1).toISOString()));
+  const merged = mergeThreads([], many);
+  assert.equal(merged.length, 50);
+  assert.equal(merged[0].id, "s59");             // most recent first
+});
+
+test("merge only ever contains rows the caller supplied", () => {
+  // the backend scopes /threads to the resolved identity; the client-side
+  // merge must never invent or import ids from anywhere else
+  const merged = mergeThreads([{ id: "mine", title: "Mine", createdAt: 1 }],
+                              [serverRow("from-server", "OK", "2026-07-01")]);
+  assert.deepEqual(new Set(merged.map((t) => t.id)),
+                   new Set(["mine", "from-server"]));
 });

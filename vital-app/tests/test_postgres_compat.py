@@ -33,7 +33,8 @@ def test_schema_renders_for_both_dialects():
     # every user-visible table exists in the shared schema
     for table in ("sleep_logs", "health_sleep", "feedback", "calendar_events",
                   "token_usage", "activity_posts", "activity_requests",
-                  "user_blocks", "activity_reports"):
+                  "user_blocks", "activity_reports", "auth_identities",
+                  "user_threads"):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in pg
 
 
@@ -154,6 +155,50 @@ def test_live_postgres_round_trip(monkeypatch):
         storage.save_feedback("pg-test-user", "t1", "up", "")
         assert any(d["n"] >= 1 for d in storage.feedback_summary()["by_day"])
 
+        # auth identity mapping: guarded insert + conflict-safety on PG
+        anon = "pg-anon-" + "a" * 24
+        assert storage.resolve_external_identity("firebase", "pg-fb-1", anon) == anon
+        assert storage.resolve_external_identity("firebase", "pg-fb-1", None) == anon
+        other = storage.resolve_external_identity("firebase", "pg-fb-2", anon)
+        assert other != anon and other.startswith("usr-")
+        assert storage.user_id_is_linked(anon)
+
+        # RACE: two subjects claim the SAME anonymous identity at the same
+        # moment (real threads, real pool connections, barrier-synchronized).
+        # UNIQUE(user_id) + targetless ON CONFLICT DO NOTHING must hand the
+        # identity to exactly one; the loser gets a fresh usr-* id.
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+        for i in range(5):
+            prize = f"pg-anon-race{i}-" + "f" * 12
+            barrier = threading.Barrier(2)
+
+            def claim(subject, prize=prize, barrier=barrier):
+                barrier.wait()
+                return storage.resolve_external_identity("firebase", subject, prize)
+
+            with ThreadPoolExecutor(max_workers=2) as pool_:
+                got = list(pool_.map(claim, [f"pg-fb-race-a{i}", f"pg-fb-race-b{i}"]))
+            assert prize in got, f"nobody claimed the anon identity (round {i})"
+            loser = next(g for g in got if g != prize)
+            assert loser.startswith("usr-"), f"double-claim or bad mint: {got}"
+            # and both mappings are now permanent
+            assert storage.resolve_external_identity(
+                "firebase", f"pg-fb-race-a{i}", None) == got[0]
+            assert storage.resolve_external_identity(
+                "firebase", f"pg-fb-race-b{i}", None) == got[1]
+
+        # authenticated thread index: first title wins, updated_at bumps
+        storage.upsert_user_thread("pg-test-user", "th1", "first message")
+        storage.upsert_user_thread("pg-test-user", "th1", "second message")
+        (thread,) = storage.user_threads("pg-test-user")
+        assert thread["title"] == "first message"
+        assert thread["updated_at"] >= thread["created_at"]
+        storage.delete_user_thread("pg-other-user", "th1")   # scoped: no-op
+        assert len(storage.user_threads("pg-test-user")) == 1
+        storage.delete_user_thread("pg-test-user", "th1")
+        assert storage.user_threads("pg-test-user") == []
+
         # buddy board: create → search → request → decide → block
         post = buddies.create_post("pg-owner", {
             "display_name": "Swim Sam", "activity": "swimming", "city": "Albany"})
@@ -174,5 +219,7 @@ def test_live_postgres_round_trip(monkeypatch):
                 c.execute(f"DELETE FROM {table} WHERE {col} LIKE 'pg-%'")
             c.execute("DELETE FROM activity_requests WHERE requester_user_id LIKE 'pg-%'")
             c.execute("DELETE FROM activity_posts WHERE user_id LIKE 'pg-%'")
+            c.execute("DELETE FROM auth_identities WHERE subject LIKE 'pg-fb-%'")
+            c.execute("DELETE FROM user_threads WHERE user_id LIKE 'pg-%'")
         storage.close_storage()    # what the API lifespan runs at shutdown
         settings.cache_clear()

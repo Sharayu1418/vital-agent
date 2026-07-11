@@ -39,9 +39,11 @@ function greeting(name) {
   return { hi: `Up late${who}?`, line: "Let's look after tomorrow-you." };
 }
 
-/* One-time, low-pressure name ask. Enter saves; "skip" never asks again. */
-function NameAsk({ onSaveName }) {
-  const [value, setValue] = useState("");
+/* One-time, low-pressure name ask. Enter saves; "skip" never asks again.
+ * `suggested` prefills from the Google account name (only offered when no
+ * VITAL name was chosen); the user still confirms or edits it. */
+function NameAsk({ onSaveName, suggested = "" }) {
+  const [value, setValue] = useState(suggested);
   return (
     <div className="name-ask rise">
       <span>What should VITAL call you?</span>
@@ -138,8 +140,10 @@ function Composer({ input, setInput, onSend, busy, hero = false }) {
   );
 }
 
-function Hero({ onStarter, nudge, input, setInput, onSend, busy, userName, onSaveName }) {
+function Hero({ onStarter, nudge, input, setInput, onSend, busy, userName,
+                onSaveName, suggestedName = "" }) {
   const g = greeting(userName);
+  const suggested = firstNameFrom(suggestedName);
   return (
     <div className="hero">
       <p className="hero-hi">{g.hi}</p>
@@ -148,7 +152,9 @@ function Hero({ onStarter, nudge, input, setInput, onSend, busy, userName, onSav
 
       <Composer input={input} setInput={setInput} onSend={onSend} busy={busy} hero />
 
-      {userName === "" && <NameAsk onSaveName={onSaveName} />}
+      {userName === "" && (
+        <NameAsk key={suggested} onSaveName={onSaveName} suggested={suggested} />
+      )}
 
       {nudge && (
         nudge.prompt ? (
@@ -206,6 +212,7 @@ function PlanCard({ plan, editText, setEditText, onDecide, busy }) {
 export default function Chat({
   messages, pendingPlan, busy, thinking, input, setInput, editText, setEditText,
   onSend, onDecide, onRate, nudge, autoRead = false, userName = null, onSaveName,
+  suggestedName = "",
 }) {
   const bottomRef = useRef(null);
   const [ttsSupported, setTtsSupported] = useState(false);
@@ -261,7 +268,8 @@ export default function Chat({
           {empty && (
             <Hero onStarter={onSend} nudge={nudge}
               input={input} setInput={setInput} onSend={onSend} busy={busy}
-              userName={userName} onSaveName={onSaveName} />
+              userName={userName} onSaveName={onSaveName}
+              suggestedName={suggestedName} />
           )}
 
           {messages.map((m, i) => (m.role === "ai" && !m.text && !m.status) ? null : (

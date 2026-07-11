@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     sqlite_path: str = "vital.db"
     database_url: str | None = None
 
+    # --- Firebase Authentication (Google Sign-In) ---
+    # OFF by default: local dev and tests stay zero-network. When enabled,
+    # bearer tokens that aren't the internal API_AUTH_TOKEN are verified as
+    # Firebase ID tokens via the Admin SDK using ADC (never a JSON key file).
+    firebase_auth_enabled: bool = False
+    firebase_project_id: str | None = None
+
     # --- Security (safe-by-default: both OFF unless explicitly set) ---
     # Shared bearer token for trusted callers (your frontend's backend).
     # Only token-authenticated callers may assert a user_id; everyone else

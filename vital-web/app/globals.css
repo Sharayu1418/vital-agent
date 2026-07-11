@@ -125,6 +125,25 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .thread-del { color: var(--muted); font-size: 15px; padding: 0 4px; border-radius: 6px; opacity: 0; }
 .thread:hover .thread-del, .memory-row:hover .thread-del { opacity: 1; }
 .thread-del:hover { color: var(--danger); }
+/* account control: quiet, bottom of the sidebar, no redesign */
+.account {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px 4px 4px; border-top: 1px solid var(--glass-border);
+}
+.account-name {
+  font-size: 12.5px; color: var(--text); font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.account-btn {
+  align-self: flex-start; font-size: 12px; color: var(--muted);
+  border: 1px solid var(--glass-border); border-radius: 999px;
+  padding: 5px 12px; transition: all 0.15s;
+}
+.account-btn:hover { color: var(--text); border-color: var(--accent); }
+.account-btn:disabled { opacity: 0.55; }
+.account-signin { color: var(--text); }
+.account-error { font-size: 11px; color: var(--amber); margin: 0; }
+
 .sidebar-foot { padding: 6px; }
 .side-hint { color: var(--muted); font-size: 12.5px; line-height: 1.5; }
 
