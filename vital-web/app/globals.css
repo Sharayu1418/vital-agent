@@ -563,17 +563,19 @@ button.ghost-danger:hover { border-color: var(--danger); }
   padding: 6px 0; border-top: 1px solid var(--glass-border); font-size: 13px; }
 .memory-row:first-of-type { border-top: none; }
 
-.daylight-card { display: flex; flex-direction: column; gap: 10px; }
-.daylight-card h3 { margin-bottom: 0; }
-.location-current {
-  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+.location-card { display: flex; flex-direction: column; }
+.location-summary {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
 }
-.location-current strong { display: block; font-size: 13.5px; font-weight: 650; }
-.location-current .side-hint { margin-top: 3px; }
+.location-summary h3 { margin-bottom: 4px; }
+.location-summary strong { display: block; font-size: 13.5px; font-weight: 650; }
 .location-change, .location-editor-actions button {
   color: var(--accent); font-size: 12px; padding: 3px 0;
 }
-.location-editor { display: flex; flex-direction: column; gap: 10px; }
+.location-editor {
+  display: flex; flex-direction: column; gap: 10px; margin-top: 12px;
+  padding-top: 12px; border-top: 1px solid var(--glass-border);
+}
 .location-device {
   width: 100%; padding: 9px 12px; border: 1px solid var(--glass-border);
   border-radius: 11px; background: var(--glass); font-size: 13px; font-weight: 600;

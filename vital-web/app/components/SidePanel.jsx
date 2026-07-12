@@ -30,8 +30,8 @@ function SleepChart({ nights, targetMin }) {
   );
 }
 
-function DaylightLocation({ location, onChange }) {
-  const [editing, setEditing] = useState(!location);
+function LocationPreference({ location, onChange }) {
+  const [editing, setEditing] = useState(false);
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
@@ -83,46 +83,48 @@ function DaylightLocation({ location, onChange }) {
   }
 
   return (
-    <section className="card daylight-card">
-      <h3>Daylight location</h3>
-      {location && !editing ? (
-        <div className="location-current">
-          <div>
-            <strong>{location.label || "Saved location"}</strong>
-            <p className="side-hint">The interface follows sunrise and sunset here.</p>
-          </div>
-          <button className="location-change" onClick={() => { setEditing(true); setError(null); }}>
-            Change
-          </button>
+    <section className="card location-card">
+      <div className="location-summary">
+        <div>
+          <h3>Location</h3>
+          <strong>{location?.label || "Not set"}</strong>
         </div>
-      ) : (
+        <button type="button" className="location-change"
+          aria-expanded={editing}
+          onClick={() => { setEditing((value) => !value); setError(null); }}>
+          {editing ? "Close" : location ? "Change" : "Set"}
+        </button>
+      </div>
+      {editing && (
         <div className="location-editor">
-          <p className="side-hint">Match the interface light to sunrise and sunset where you are.</p>
-          <button className="location-device" onClick={useDeviceLocation}
+          <button type="button" className="location-device" onClick={useDeviceLocation}
             disabled={busy !== null}>
-            {busy === "device" ? "Finding location..." : "Use my location"}
+            {busy === "device" ? "Finding location..." : "Use current location"}
           </button>
-          <div className="location-divider"><span>or enter a city</span></div>
+          <div className="location-divider"><span>or</span></div>
           <form className="location-form" onSubmit={findCity}>
-            <label htmlFor="daylight-city">City or place</label>
+            <label htmlFor="location-city">City or place</label>
             <div className="location-search-row">
-              <input id="daylight-city" value={query}
+              <input id="location-city" value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="Albany, NY" autoComplete="address-level2" />
-              <button className="primary" disabled={busy !== null || query.trim().length < 2}>
+              <button type="submit" className="primary"
+                disabled={busy !== null || query.trim().length < 2}>
                 {busy === "manual" ? "Finding..." : "Set"}
               </button>
             </div>
           </form>
           {error && <p className="location-error" role="alert">{error}</p>}
-          {location && (
-            <div className="location-editor-actions">
-              <button onClick={() => { setEditing(false); setError(null); }}>Cancel</button>
-              <button onClick={() => { onChange(null); setEditing(true); }}>
-                Use clock only
+          <div className="location-editor-actions">
+            <button type="button" onClick={() => { setEditing(false); setError(null); }}>
+              Cancel
+            </button>
+            {location && (
+              <button type="button" onClick={() => { onChange(null); setEditing(false); }}>
+                Remove location
               </button>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       )}
     </section>
@@ -183,7 +185,7 @@ export default function SidePanel({
 
         <Buddies />
 
-        <DaylightLocation location={location} onChange={onLocationChange} />
+        <LocationPreference location={location} onChange={onLocationChange} />
 
         <section className="card">
           <h3>What VITAL knows</h3>

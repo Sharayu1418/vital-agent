@@ -16,6 +16,7 @@ import {
 } from "./lib/auth";
 import { firebaseConfigured } from "./lib/firebase";
 import { createGenerationGuard } from "./lib/guard";
+import { shouldRequestDeviceLocation } from "./lib/location";
 import { isSynthesisSupported } from "./lib/speech";
 import { applyEvent, initialStream, shouldKeepBubble, sseEvents } from "./lib/stream";
 import { clearGeo, firstNameFrom, readGeo, resolveTheme, writeGeo } from "./lib/theme";
@@ -92,6 +93,43 @@ export default function Home() {
   const gate = gateFor({ ready: authReady, user: authUser,
                          configured: firebaseConfigured(),
                          allowAnon: anonAllowed() });
+
+  // Ask through the browser once the signed-in product is visible. Existing
+  // choices are respected: a saved place skips the prompt, and a browser-level
+  // denial is never challenged. Manual entry remains available in the panel.
+  useEffect(() => {
+    const available = typeof navigator !== "undefined" && Boolean(navigator.geolocation);
+    const existing = readGeo(localStorage);
+    if (!shouldRequestDeviceLocation({ gate, location: existing, available })) return undefined;
+
+    let live = true;
+    const accept = (position) => {
+      if (!live) return;
+      const saved = writeGeo(localStorage, position.coords.latitude, position.coords.longitude, {
+        label: "Current location", source: "device",
+      });
+      setDaylightLocation(saved);
+      const { theme, phase } = resolveTheme(Date.now(), saved);
+      document.documentElement.dataset.theme = theme;
+      document.documentElement.dataset.daylight = phase;
+    };
+    const request = () => navigator.geolocation.getCurrentPosition(
+      accept, () => {}, { timeout: 8000, maximumAge: 6 * 3600 * 1000 },
+    );
+
+    if (navigator.permissions?.query) {
+      navigator.permissions.query({ name: "geolocation" })
+        .then(({ state }) => {
+          if (live && shouldRequestDeviceLocation({
+            gate, location: readGeo(localStorage), available, permission: state,
+          })) request();
+        })
+        .catch(() => { if (live) request(); });
+    } else {
+      request();
+    }
+    return () => { live = false; };
+  }, [gate]);
 
   // ---- threads + panel data: ONLY in "app" (signed in, or explicitly
   // ---- allowed anonymous local dev), and again on account change ----

@@ -1,7 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { formatLocationLabel, geocodeLocation } from "../app/lib/location.js";
+import {
+  formatLocationLabel, geocodeLocation, shouldRequestDeviceLocation,
+} from "../app/lib/location.js";
+
+test("device location is requested only in the signed-in app", () => {
+  const base = { gate: "app", location: null, available: true, permission: "prompt" };
+  assert.equal(shouldRequestDeviceLocation(base), true);
+  assert.equal(shouldRequestDeviceLocation({ ...base, gate: "login" }), false);
+  assert.equal(shouldRequestDeviceLocation({ ...base, location: { lat: 1, lng: 2 } }), false);
+  assert.equal(shouldRequestDeviceLocation({ ...base, available: false }), false);
+  assert.equal(shouldRequestDeviceLocation({ ...base, permission: "denied" }), false);
+  assert.equal(shouldRequestDeviceLocation({ ...base, permission: "granted" }), true);
+});
 
 test("formatLocationLabel removes empty and duplicate parts", () => {
   assert.equal(formatLocationLabel({

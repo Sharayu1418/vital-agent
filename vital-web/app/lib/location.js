@@ -1,5 +1,9 @@
 const GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search";
 
+export function shouldRequestDeviceLocation({ gate, location, available, permission }) {
+  return gate === "app" && !location && available && permission !== "denied";
+}
+
 export function formatLocationLabel(result) {
   const parts = [result?.name, result?.admin1, result?.country]
     .filter((part) => typeof part === "string" && part.trim());
