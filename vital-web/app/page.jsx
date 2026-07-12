@@ -49,6 +49,7 @@ export default function Home() {
   // identity epoch: async work captures a liveness check; sign-out /
   // account change invalidates it so stale responses can't write state
   const guardRef = useRef(createGenerationGuard());
+  const reauthInFlightRef = useRef(false);
 
   // ---- boot: daylight theme + prefs + auth subscription ----
   useEffect(() => {
@@ -76,15 +77,42 @@ export default function Home() {
     // account-scoped loading below. Every auth-state change clears any stale
     // reauth notice — a fresh/refreshed token means we are NOT stuck.
     setTokenProvider(idToken);
-    setUnauthorizedHandler(() => setAuthError("Please sign in again."));
+    setUnauthorizedHandler(() => {
+      // A refreshed Firebase token was rejected twice. Do not leave the app
+      // showing a signed-in account beside a "sign in again" warning: retire
+      // the invalid local session and let the login gate own the recovery.
+      if (reauthInFlightRef.current) return;
+      reauthInFlightRef.current = true;
+      guardRef.current.invalidate();
+      setAuthUser(null);
+      setAuthReady(true);
+      setAuthBusy(true);
+      setAuthError("Your session ended. Sign in to continue.");
+      signOutUser()
+        .catch(() => {})
+        .finally(() => setAuthBusy(false));
+    });
     consumeRedirectResult().then((err) => { if (err) setAuthError(err); });
     let unsubscribe = () => {};
     watchAuth((user) => {
-      setAuthUser(user);
       setAuthReady(true);
-      setAuthError(null);   // token (re)issued → clear any "sign in again"
+      // A late token event can race the forced sign-out below. Do not reopen
+      // the app shell once recovery has started; wait for the null event.
+      if (user && reauthInFlightRef.current) return;
+      setAuthUser(user);
+      // A real user/token is the only auth event that proves recovery. Keep
+      // the session-ended explanation when signOut emits its null event.
+      if (user) {
+        reauthInFlightRef.current = false;
+        setAuthError(null);
+      }
     }).then((u) => { unsubscribe = u; });
-    return () => { clearInterval(themeTimer); unsubscribe(); };
+    return () => {
+      clearInterval(themeTimer);
+      setUnauthorizedHandler(null);
+      setTokenProvider(null);
+      unsubscribe();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -173,6 +201,7 @@ export default function Home() {
   }
 
   async function signOut() {
+    reauthInFlightRef.current = false;
     setAuthBusy(true);
     // Account data leaves the screen NOW — synchronously, before any
     // network round-trip — and every in-flight load started under this
@@ -469,8 +498,9 @@ export default function Home() {
       <Sidebar threads={threads} activeId={activeId}
         onSelect={selectThread} onNew={createThread} onDelete={deleteThread}
         open={sidebarOpen} onClose={() => setSidebarOpen(false)}
+        memories={memories} onForget={forget}
         authReady={authReady} authUser={authUser} authBusy={authBusy}
-        authError={authError} onSignIn={signIn} onSignOut={signOut} />
+        onSignIn={signIn} onSignOut={signOut} />
 
       <main className="main">
         <header className="topbar">
@@ -505,9 +535,9 @@ export default function Home() {
           suggestedName={authUser?.displayName ?? ""} />
       </main>
 
-      <SidePanel sleep={sleep} events={events} memories={memories}
-        onForget={forget} open={panelOpen} onClose={() => setPanelOpen(false)}
-        location={daylightLocation} onLocationChange={updateDaylightLocation}
+      <SidePanel sleep={sleep} events={events} open={panelOpen}
+        onClose={() => setPanelOpen(false)} location={daylightLocation}
+        onLocationChange={updateDaylightLocation}
         userName={userName} />
     </div>
   );

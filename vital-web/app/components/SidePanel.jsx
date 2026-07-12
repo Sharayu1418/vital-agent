@@ -132,7 +132,7 @@ function LocationPreference({ location, onChange }) {
 }
 
 export default function SidePanel({
-  sleep, events, memories, onForget, open, onClose, location, onLocationChange, userName,
+  sleep, events, open, onClose, location, onLocationChange, userName,
 }) {
   const nights = sleep?.nights ?? [];
   const avg = nights.length
@@ -148,7 +148,7 @@ export default function SidePanel({
         <section className="card">
           <h3>Sleep</h3>
           {nights.length === 0 ? (
-            <p className="side-hint">No sleep data yet. Tell me how last night went.</p>
+            <p className="side-hint">No sleep data yet.</p>
           ) : (
             <>
               <div className="stat-row">
@@ -185,22 +185,6 @@ export default function SidePanel({
         <Buddies suggestedName={userName && userName !== "-" ? userName : ""} />
 
         <LocationPreference location={location} onChange={onLocationChange} />
-
-        <section className="card">
-          <h3>What VITAL knows</h3>
-          {!memories?.length ? (
-            <p className="side-hint">Useful details from your chats appear
-              here. Remove them anytime.</p>
-          ) : (
-            memories.map((m) => (
-              <div className="memory-row" key={m.key}>
-                <span>{m.fact}</span>
-                <button className="thread-del" title="Forget"
-                  onClick={() => onForget(m.key)}>×</button>
-              </div>
-            ))
-          )}
-        </section>
       </aside>
     </>
   );

@@ -116,6 +116,8 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 
 .sidebar {
   display: flex; flex-direction: column; gap: 12px;
+  min-height: 0;
+  overflow: hidden;
   margin: 12px 0 12px 12px; padding: 14px 10px;
   border-radius: 20px;
   background: var(--glass); border: 1px solid var(--glass-border);
@@ -137,7 +139,48 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 }
 .new-chat:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 
-.thread-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.sidebar-history {
+  min-height: 92px; flex: 1;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.sidebar-label, .sidebar-memory h2 {
+  padding: 0 8px; color: var(--muted); font-size: 10.5px;
+  font-weight: 700; text-transform: uppercase; letter-spacing: 0;
+}
+.thread-list {
+  min-height: 0; flex: 1; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 2px; padding-right: 2px;
+  scrollbar-width: thin; scrollbar-color: var(--glass-border) transparent;
+}
+.thread-list::-webkit-scrollbar, .sidebar-memory-list::-webkit-scrollbar { width: 5px; }
+.thread-list::-webkit-scrollbar-thumb, .sidebar-memory-list::-webkit-scrollbar-thumb {
+  background: var(--glass-border); border-radius: 999px;
+}
+.sidebar-memory {
+  flex: 0 1 auto; max-height: min(24dvh, 190px); overflow: hidden;
+  padding: 10px 4px; border-top: 1px solid var(--glass-border);
+}
+.sidebar-memory-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; margin-bottom: 5px;
+}
+.sidebar-memory-head h2 { padding: 0; }
+.sidebar-memory-head > span {
+  min-width: 19px; height: 19px; padding: 0 5px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 999px; background: var(--glass-strong);
+  color: var(--muted); font-size: 10px;
+}
+.sidebar-memory > .side-hint { padding: 0 4px; }
+.sidebar-memory-list {
+  max-height: 142px; overflow-y: auto; padding-right: 2px;
+  scrollbar-width: thin; scrollbar-color: var(--glass-border) transparent;
+}
+.sidebar-memory .memory-row { align-items: flex-start; font-size: 12px; line-height: 1.4; }
+.sidebar-memory .memory-row > span {
+  display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
 .thread {
   display: flex; align-items: center; gap: 6px;
   border-radius: 10px; padding: 8px 10px; cursor: pointer;
@@ -269,9 +312,6 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .account-btn:hover { color: var(--text); border-color: var(--accent); }
 .account-btn:disabled { opacity: 0.55; }
 .account-signin { color: var(--text); }
-.account-error { font-size: 11px; color: var(--amber); margin: 0; }
-
-.sidebar-foot { padding: 6px; }
 .side-hint { color: var(--muted); font-size: 12.5px; line-height: 1.5; }
 
 /* ---------- top bar ---------- */

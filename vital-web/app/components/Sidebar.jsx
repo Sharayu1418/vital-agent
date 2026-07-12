@@ -3,7 +3,7 @@ import { accountLabel } from "../lib/auth";
 
 export default function Sidebar({
   threads, activeId, onSelect, onNew, onDelete, open, onClose,
-  authReady, authUser, authBusy, authError, onSignIn, onSignOut,
+  memories, onForget, authReady, authUser, authBusy, onSignIn, onSignOut,
 }) {
   return (
     <>
@@ -16,20 +16,45 @@ export default function Sidebar({
 
         <button className="new-chat" onClick={onNew}>+ New chat</button>
 
-        <nav className="thread-list">
-          {threads.map((t) => (
-            <div key={t.id}
-              className={`thread ${t.id === activeId ? "active" : ""}`}
-              onClick={() => onSelect(t.id)}>
-              <span className="thread-title">{t.title}</span>
-              <button className="thread-del" title="Remove from list"
-                onClick={(e) => { e.stopPropagation(); onDelete(t.id); }}>×</button>
+        <div className="sidebar-history">
+          <span className="sidebar-label">Chats</span>
+          <nav className="thread-list" aria-label="Chat history">
+            {threads.map((t) => (
+              <div key={t.id}
+                className={`thread ${t.id === activeId ? "active" : ""}`}
+                onClick={() => onSelect(t.id)}>
+                <span className="thread-title">{t.title}</span>
+                <button className="thread-del" title="Remove from list"
+                  onClick={(e) => { e.stopPropagation(); onDelete(t.id); }}>×</button>
+              </div>
+            ))}
+            {threads.length === 0 && (
+              <p className="side-hint">Conversations appear here.</p>
+            )}
+          </nav>
+        </div>
+
+        <section className="sidebar-memory" aria-labelledby="sidebar-memory-title">
+          <div className="sidebar-memory-head">
+            <h2 id="sidebar-memory-title">What VITAL knows</h2>
+            {memories?.length > 0 && (
+              <span aria-label={`${memories.length} saved details`}>{memories.length}</span>
+            )}
+          </div>
+          {!memories?.length ? (
+            <p className="side-hint">Nothing saved yet.</p>
+          ) : (
+            <div className="sidebar-memory-list">
+              {memories.map((m) => (
+                <div className="memory-row" key={m.key}>
+                  <span>{m.fact}</span>
+                  <button className="thread-del" title="Forget"
+                    onClick={() => onForget(m.key)}>×</button>
+                </div>
+              ))}
             </div>
-          ))}
-          {threads.length === 0 && (
-            <p className="side-hint">Conversations appear here.</p>
           )}
-        </nav>
+        </section>
 
         <div className="account">
           {!authReady ? (
@@ -50,12 +75,7 @@ export default function Sidebar({
               {authBusy ? "Opening Google…" : "Sign in with Google"}
             </button>
           )}
-          {authError && <p className="account-error">{authError}</p>}
         </div>
-
-        <footer className="sidebar-foot">
-          <span className="side-hint">agents, not search</span>
-        </footer>
       </aside>
     </>
   );
