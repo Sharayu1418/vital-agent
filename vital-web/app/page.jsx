@@ -6,19 +6,19 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { LoadingScreen, LoginScreen, UnconfiguredScreen } from "./components/AuthGate";
 import Chat from "./components/Chat";
-import { MenuIcon, MoonIcon, SpeakerIcon, UploadIcon } from "./components/icons";
+import { MenuIcon, PanelRightIcon, SpeakerIcon, UploadIcon } from "./components/icons";
 import Sidebar from "./components/Sidebar";
 import SidePanel from "./components/SidePanel";
 import { api, setTokenProvider, setUnauthorizedHandler } from "./lib/api";
 import {
-  anonAllowed, clearSessionTransport, gateFor, idToken, signInWithGoogle,
-  signOutUser, watchAuth,
+  anonAllowed, clearSessionTransport, consumeRedirectResult, gateFor, idToken,
+  signInWithGoogle, signOutUser, watchAuth,
 } from "./lib/auth";
 import { firebaseConfigured } from "./lib/firebase";
 import { createGenerationGuard } from "./lib/guard";
 import { isSynthesisSupported } from "./lib/speech";
 import { applyEvent, initialStream, shouldKeepBubble, sseEvents } from "./lib/stream";
-import { firstNameFrom, themeForHour } from "./lib/theme";
+import { clearGeo, firstNameFrom, readGeo, resolveTheme, writeGeo } from "./lib/theme";
 import {
   loadThreads, mergeThreads, newThread, renameIfNew, saveThreads, uid,
 } from "./lib/threads";
@@ -38,6 +38,7 @@ export default function Home() {
   const [memories, setMemories] = useState([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [daylightLocation, setDaylightLocation] = useState(null);
   const [ttsAvailable, setTtsAvailable] = useState(false);
   const [autoRead, setAutoRead] = useState(false);
   const [authUser, setAuthUser] = useState(null);
@@ -48,12 +49,19 @@ export default function Home() {
   // account change invalidates it so stale responses can't write state
   const guardRef = useRef(createGenerationGuard());
 
-  // ---- boot: theme + prefs + auth subscription ----
+  // ---- boot: daylight theme + prefs + auth subscription ----
   useEffect(() => {
-    // theme follows the clock (no toggle): sunrise mornings, night otherwise;
-    // re-checked every few minutes so it flips while the tab stays open
-    const applyTheme = () =>
-      (document.documentElement.dataset.theme = themeForHour(new Date().getHours()));
+    // Theme follows real daylight when we know the user's location (sunrise
+    // → day → sunset → night), and the local clock otherwise. Never a manual
+    // toggle. Re-checked every few minutes so it shifts while the tab is open.
+    const root = document.documentElement;
+    const applyTheme = () => {
+      const savedLocation = readGeo(localStorage);
+      const { theme, phase } = resolveTheme(Date.now(), savedLocation);
+      root.dataset.theme = theme;
+      root.dataset.daylight = phase;   // drives subtle dawn/dusk warmth in CSS
+    };
+    setDaylightLocation(readGeo(localStorage));
     applyTheme();
     const themeTimer = setInterval(applyTheme, 5 * 60 * 1000);
 
@@ -64,13 +72,16 @@ export default function Home() {
     // From here every API call can carry a Firebase ID token (null when
     // signed out → no header). watchAuth wraps onIdTokenChanged, so its
     // FIRST callback is the "initial auth state known" signal that unlocks
-    // account-scoped loading below.
+    // account-scoped loading below. Every auth-state change clears any stale
+    // reauth notice — a fresh/refreshed token means we are NOT stuck.
     setTokenProvider(idToken);
     setUnauthorizedHandler(() => setAuthError("Please sign in again."));
+    consumeRedirectResult().then((err) => { if (err) setAuthError(err); });
     let unsubscribe = () => {};
     watchAuth((user) => {
       setAuthUser(user);
       setAuthReady(true);
+      setAuthError(null);   // token (re)issued → clear any "sign in again"
     }).then((u) => { unsubscribe = u; });
     return () => { clearInterval(themeTimer); unsubscribe(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -87,6 +98,7 @@ export default function Home() {
   useEffect(() => {
     if (gate !== "app") return undefined;
     const live = guardRef.current.begin();  // new identity epoch
+    setAuthError(null);   // reached the app → no reauth prompt should linger
     (async () => {
       let list = loadThreads(localStorage);
       if (authUser) {
@@ -138,6 +150,7 @@ export default function Home() {
     setSleep(null);
     setEvents([]);
     setMemories([]);
+    setAuthError(null);   // no reauth prompt carries into the login screen
     // guarded finally blocks won't run for the old identity, so reset the
     // request flags here or the composer stays stuck "thinking"
     setBusy(false);
@@ -158,6 +171,16 @@ export default function Home() {
     localStorage.setItem("vital_read_aloud", next ? "1" : "0");
   }
 
+  function updateDaylightLocation(next) {
+    let saved = null;
+    if (next) saved = writeGeo(localStorage, next.lat, next.lng, next);
+    else clearGeo(localStorage);
+    setDaylightLocation(saved);
+    const { theme, phase } = resolveTheme(Date.now(), saved);
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.dataset.daylight = phase;
+  }
+
   function saveName(raw) {
     const name = firstNameFrom(raw);
     setUserName(name || "-");        // "-" = asked and skipped; never ask again
@@ -176,6 +199,9 @@ export default function Home() {
       const eventsBody = c.ok ? (await c.json()).events : null;
       const memoriesBody = m.ok ? (await m.json()).memories : null;
       if (!live()) return;
+      // a working authenticated request proves we're not stuck — retire any
+      // lingering "sign in again" notice (keeps the reauth prompt non-sticky)
+      if (s.ok || c.ok || m.ok) setAuthError(null);
       if (sleepBody) setSleep(sleepBody);
       if (eventsBody) setEvents(eventsBody);
       if (memoriesBody) setMemories(memoriesBody);
@@ -426,8 +452,9 @@ export default function Home() {
               <input type="file" accept=".csv,.xml" hidden
                 onChange={(e) => e.target.files[0] && upload(e.target.files[0])} />
             </label>
-            <button className="icon-btn only-mobile" aria-label="Open panel"
-              onClick={() => setPanelOpen(true)}><MoonIcon /></button>
+            <button className="icon-btn only-mobile" aria-label="Open insights panel"
+              title="Sleep, plan, and what VITAL knows"
+              onClick={() => setPanelOpen(true)}><PanelRightIcon /></button>
           </div>
         </header>
 
@@ -440,7 +467,8 @@ export default function Home() {
       </main>
 
       <SidePanel sleep={sleep} events={events} memories={memories}
-        onForget={forget} open={panelOpen} onClose={() => setPanelOpen(false)} />
+        onForget={forget} open={panelOpen} onClose={() => setPanelOpen(false)}
+        location={daylightLocation} onLocationChange={updateDaylightLocation} />
     </div>
   );
 }

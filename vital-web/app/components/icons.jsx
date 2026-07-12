@@ -59,10 +59,16 @@ export function MenuIcon(props) {
   );
 }
 
-export function MoonIcon(props) {
+/* Opens the live side panel (sleep / plan / what VITAL knows). A framed
+ * panel with a highlighted right column — reads as "insights", not a
+ * dark-mode toggle (the theme follows daylight, never a manual switch). */
+export function PanelRightIcon(props) {
   return (
     <svg {...base} {...props}>
-      <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <line x1="15" y1="4" x2="15" y2="20" />
+      <line x1="18" y1="9" x2="18" y2="9" />
+      <line x1="18" y1="13" x2="18" y2="13" />
     </svg>
   );
 }

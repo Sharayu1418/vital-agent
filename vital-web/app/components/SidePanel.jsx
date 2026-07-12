@@ -1,6 +1,9 @@
 "use client";
 /* Live glance panel — WHOOP-style progressive disclosure: the top tier is
  * glanceable (score-ish numbers, tiny chart); depth lives in the chat. */
+import { useEffect, useState } from "react";
+
+import { geocodeLocation } from "../lib/location";
 import Buddies from "./Buddies";
 
 function SleepChart({ nights, targetMin }) {
@@ -27,7 +30,108 @@ function SleepChart({ nights, targetMin }) {
   );
 }
 
-export default function SidePanel({ sleep, events, memories, onForget, open, onClose }) {
+function DaylightLocation({ location, onChange }) {
+  const [editing, setEditing] = useState(!location);
+  const [query, setQuery] = useState("");
+  const [busy, setBusy] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (location) setEditing(false);
+  }, [location]);
+
+  async function findCity(event) {
+    event.preventDefault();
+    setBusy("manual");
+    setError(null);
+    try {
+      const result = await geocodeLocation(query);
+      onChange(result);
+      setQuery("");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function useDeviceLocation() {
+    if (!navigator.geolocation) {
+      setError("Location access isn't available in this browser. Enter a city instead.");
+      return;
+    }
+    setBusy("device");
+    setError(null);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        onChange({
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+          label: "Current location",
+          source: "device",
+        });
+        setBusy(null);
+      },
+      (err) => {
+        setError(err.code === 1
+          ? "Location permission was declined. You can enter a city instead."
+          : "We couldn't get your location. Enter a city or try again.");
+        setBusy(null);
+      },
+      { timeout: 8000, maximumAge: 6 * 3600 * 1000 },
+    );
+  }
+
+  return (
+    <section className="card daylight-card">
+      <h3>Daylight location</h3>
+      {location && !editing ? (
+        <div className="location-current">
+          <div>
+            <strong>{location.label || "Saved location"}</strong>
+            <p className="side-hint">The interface follows sunrise and sunset here.</p>
+          </div>
+          <button className="location-change" onClick={() => { setEditing(true); setError(null); }}>
+            Change
+          </button>
+        </div>
+      ) : (
+        <div className="location-editor">
+          <p className="side-hint">Match the interface light to sunrise and sunset where you are.</p>
+          <button className="location-device" onClick={useDeviceLocation}
+            disabled={busy !== null}>
+            {busy === "device" ? "Finding location..." : "Use my location"}
+          </button>
+          <div className="location-divider"><span>or enter a city</span></div>
+          <form className="location-form" onSubmit={findCity}>
+            <label htmlFor="daylight-city">City or place</label>
+            <div className="location-search-row">
+              <input id="daylight-city" value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Albany, NY" autoComplete="address-level2" />
+              <button className="primary" disabled={busy !== null || query.trim().length < 2}>
+                {busy === "manual" ? "Finding..." : "Set"}
+              </button>
+            </div>
+          </form>
+          {error && <p className="location-error" role="alert">{error}</p>}
+          {location && (
+            <div className="location-editor-actions">
+              <button onClick={() => { setEditing(false); setError(null); }}>Cancel</button>
+              <button onClick={() => { onChange(null); setEditing(true); }}>
+                Use clock only
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+export default function SidePanel({
+  sleep, events, memories, onForget, open, onClose, location, onLocationChange,
+}) {
   const nights = sleep?.nights ?? [];
   const avg = nights.length
     ? nights.reduce((a, n) => a + n.duration_min, 0) / nights.length : null;
@@ -78,6 +182,8 @@ export default function SidePanel({ sleep, events, memories, onForget, open, onC
         </section>
 
         <Buddies />
+
+        <DaylightLocation location={location} onChange={onLocationChange} />
 
         <section className="card">
           <h3>What VITAL knows</h3>

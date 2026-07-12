@@ -35,22 +35,35 @@ export async function idToken(force = false) {
   return user.getIdToken(force);
 }
 
-/* Popup first (best desktop UX); redirect when the environment can't do
- * popups. Throws with a short human message on real failures. */
+/* Same-page redirect flow (OAuth-first): the whole page navigates to
+ * Google and back, so there's no side popup window and the user always
+ * lands back on the login screen — never with the app shell peeking
+ * through. On return, onIdTokenChanged fires with the signed-in user;
+ * consumeRedirectResult() surfaces any error that happened at Google. */
 export async function signInWithGoogle() {
   const auth = await getFirebaseAuth();
   if (!auth) throw new Error("Sign-in isn't configured on this deployment.");
-  const { GoogleAuthProvider, signInWithPopup, signInWithRedirect } =
-    await import("firebase/auth");
+  const { GoogleAuthProvider, signInWithRedirect } = await import("firebase/auth");
   const provider = new GoogleAuthProvider();
   try {
-    await signInWithPopup(auth, provider);
+    await signInWithRedirect(auth, provider);  // navigates away; resumes on return
   } catch (err) {
-    if (REDIRECT_FALLBACK_CODES.has(err?.code)) {
-      await signInWithRedirect(auth, provider);  // resolves after page return
-      return;
-    }
-    throw new Error(authErrorText(err?.code));
+    throw new Error(authErrorText(err?.code));  // e.g. blocked before navigating
+  }
+}
+
+/* Call once on boot: completes a redirect sign-in and returns a short
+ * human message if Google rejected it (unauthorized domain, cancelled,
+ * network), or null on success / when there was no redirect in flight. */
+export async function consumeRedirectResult() {
+  const auth = await getFirebaseAuth();
+  if (!auth) return null;
+  const { getRedirectResult } = await import("firebase/auth");
+  try {
+    await getRedirectResult(auth);  // onIdTokenChanged handles the user
+    return null;
+  } catch (err) {
+    return authErrorText(err?.code);
   }
 }
 
@@ -82,11 +95,6 @@ export function gateFor({ ready, user, configured, allowAnon }) {
   if (!configured) return allowAnon ? "app" : "unconfigured";
   return "login";
 }
-
-export const REDIRECT_FALLBACK_CODES = new Set([
-  "auth/popup-blocked",
-  "auth/operation-not-supported-in-this-environment",
-]);
 
 export function authErrorText(code) {
   switch (code) {
