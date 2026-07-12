@@ -438,7 +438,8 @@ export default function Home() {
   // Human-centric nudge: one gentle, data-aware pull toward the next action
   function nudgeFor() {
     if (!sleep?.nights?.length) {
-      return { text: "Tip: upload your sleep data (top right) and VITAL can analyze your real nights" };
+      return { text: "How did you sleep last night?",
+               prompt: "Help me check in on how I slept last night" };
     }
     const target = sleep.target_min ?? 480;
     const debtH = sleep.nights
@@ -506,7 +507,8 @@ export default function Home() {
 
       <SidePanel sleep={sleep} events={events} memories={memories}
         onForget={forget} open={panelOpen} onClose={() => setPanelOpen(false)}
-        location={daylightLocation} onLocationChange={updateDaylightLocation} />
+        location={daylightLocation} onLocationChange={updateDaylightLocation}
+        userName={userName} />
     </div>
   );
 }

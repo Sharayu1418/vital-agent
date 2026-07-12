@@ -147,7 +147,7 @@ export function timeGreeting(hour) {
     return { hi: "Good evening", line: "How did today treat you?" };
   }
   // 22:00–04:59 — the small hours read as night, matching themeForHour
-  return { hi: "Up late", line: "Let's look after tomorrow-you." };
+  return { hi: "Up late", line: "Let's make tomorrow a little easier." };
 }
 
 /* Short, gentle lines rotated once per day. Human tone, no productivity

@@ -31,17 +31,14 @@ const LABELS = {
 
 const TABS = [
   { id: "create", label: "Post" },
-  { id: "browse", label: "Browse" },
+  { id: "browse", label: "Find" },
   { id: "requests", label: "Requests" },
 ];
 
 const HEADINGS = {
-  create: ["Post a plan",
-    "Say what you want to do and roughly where."],
-  browse: ["Find buddies",
-    "Search by activity and city. You decide who joins."],
-  requests: ["Requests",
-    "Approve people for your posts, and track the ones you sent."],
+  create: ["Post an activity", "Three quick details to get started."],
+  browse: ["Find activity partners", "Search by activity and city."],
+  requests: ["Requests", "Review requests you received or sent."],
 };
 
 function Select({ field, value, onChange, options }) {
@@ -60,19 +57,21 @@ function Input({ field, value, onChange, placeholder = "", hint = null }) {
   const required = REQUIRED_FIELDS.includes(field);
   return (
     <label className="bud-field">
-      <span>{LABELS[field]}{required && <em className="bud-req"> required</em>}</span>
-      <input value={value} placeholder={placeholder}
+      <span>{LABELS[field]}</span>
+      <input value={value} placeholder={placeholder} required={required}
         onChange={(e) => onChange(field, e.target.value)} />
       {hint && <small className="bud-hint">{hint}</small>}
     </label>
   );
 }
 
-function CreateForm({ onCreated }) {
-  const [form, setForm] = useState(EMPTY_FORM);
+function CreateForm({ onCreated, suggestedName = "" }) {
+  const [form, setForm] = useState(() => ({
+    ...EMPTY_FORM, display_name: suggestedName,
+  }));
   const [note, setNote] = useState(null);
   const [busy, setBusy] = useState(false);
-  // progressive disclosure (NN/g): four key fields first, the rest on request
+  // Three essentials first; optional preferences appear only on request.
   const [details, setDetails] = useState(false);
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -103,14 +102,14 @@ function CreateForm({ onCreated }) {
       <Input field="activity" value={form.activity} onChange={set}
         placeholder="Swimming" />
       <Input field="city" value={form.city} onChange={set} placeholder="Albany" />
-      <Input field="area" value={form.area} onChange={set} placeholder="Guilderland"
-        hint="Part of town, not an address" />
 
       {!details ? (
         <button type="button" className="bud-disclose"
-          onClick={() => setDetails(true)}>+ Add details</button>
+          onClick={() => setDetails(true)}>Add preferences (optional)</button>
       ) : (
         <>
+          <Input field="area" value={form.area} onChange={set} placeholder="Guilderland"
+            hint="Part of town, not an address" />
           <Select field="time_window" value={form.time_window} onChange={set} options={TIME_WINDOWS} />
           <Select field="vibe" value={form.vibe} onChange={set} options={VIBES} />
           <Select field="skill_level" value={form.skill_level} onChange={set} options={SKILLS} />
@@ -128,7 +127,7 @@ function CreateForm({ onCreated }) {
 
       {note && <p className="bud-note">{note}</p>}
       <button className="primary bud-submit" disabled={busy} onClick={submit}>
-        {busy ? "Posting…" : "Post"}
+        {busy ? "Posting…" : "Post activity"}
       </button>
       <p className="bud-safety">{SAFETY_LINE}</p>
     </div>
@@ -284,7 +283,7 @@ function Requests({ requests, onDecide }) {
   );
 }
 
-export default function Buddies() {
+export default function Buddies({ suggestedName = "" }) {
   const [mine, setMine] = useState([]);
   const [requests, setRequests] = useState({ incoming: [], outgoing: [] });
   const [view, setView] = useState(null); // null | create | browse | requests
@@ -324,9 +323,8 @@ export default function Buddies() {
     <section className="card">
       <h3>Activity Buddies</h3>
       {mine.length === 0 ? (
-        <p className="side-hint">Opt in to find people for shared activities.
-          Others see only what you choose to post, under a display name you
-          pick. Early feature, so expect a few rough edges.</p>
+        <p className="side-hint">Find people for an activity. You choose what
+          to share and what name others see.</p>
       ) : (
         mine.map((p) => (
           <div className="bud-mine-row" key={p.id}>
@@ -340,13 +338,14 @@ export default function Buddies() {
         ))
       )}
       <div className="bud-actions">
+        <button className="bud-action-primary"
+          onClick={() => setView("browse")}>Find people</button>
         <button onClick={() => setView("create")}>
-          {mine.length ? "New post" : "Create a buddy post"}
+          {mine.length ? "New activity" : "Post an activity"}
         </button>
-        <button onClick={() => setView("browse")}>Find buddies</button>
-        <button onClick={() => setView("requests")}>
-          Requests{pending > 0 ? ` (${pending})` : ""}
-        </button>
+        {pending > 0 && (
+          <button onClick={() => setView("requests")}>Requests ({pending})</button>
+        )}
       </div>
 
       {view && typeof document !== "undefined" && createPortal(
@@ -368,7 +367,8 @@ export default function Buddies() {
               <h4 className="bud-title">{title}</h4>
               <p className="bud-sub">{subtitle}</p>
               {view === "create" && (
-                <CreateForm onCreated={() => { refresh(); setView(null); }} />
+                <CreateForm suggestedName={suggestedName}
+                  onCreated={() => { refresh(); setView(null); }} />
               )}
               {view === "browse" && <Browse />}
               {view === "requests" && <Requests requests={requests} onDecide={decide} />}

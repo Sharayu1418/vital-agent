@@ -17,10 +17,9 @@ const mdComponents = {
 };
 
 const STARTERS = [
-  "I slept 4 hours but I'm buzzing with energy",
-  "What should I do this weekend?",
-  "I want a hobby but don't know what",
-  "Find people who are into bouldering",
+  "I slept badly. What should I do today?",
+  "Help me plan my weekend",
+  "Help me find something fun nearby",
 ];
 
 function greeting(name) {
@@ -38,7 +37,7 @@ function NameAsk({ onSaveName, suggested = "" }) {
   const [value, setValue] = useState(suggested);
   return (
     <div className="name-ask rise">
-      <span>What should VITAL call you?</span>
+      <span>What should I call you?</span>
       <input value={value} maxLength={30} placeholder="First name"
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => {
@@ -110,7 +109,7 @@ function Composer({ input, setInput, onSend, busy, hero = false }) {
     <>
       <div className={`composer-inner ${hero ? "hero-pill" : ""}`}>
         <textarea ref={ref} value={input} rows={1}
-          placeholder={busy ? "thinking…" : listening ? "Listening…" : "Ask anything…"}
+          placeholder={busy ? "thinking…" : listening ? "Listening…" : "What do you need right now?"}
           disabled={busy}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
@@ -165,8 +164,7 @@ function Hero({ onStarter, nudge, input, setInput, onSend, busy, userName,
       </div>
 
       <p className="hero-foot">
-        One place for sleep, energy, activities, ideas and people.
-        Nothing touches your calendar without your OK.
+        You stay in control. Nothing reaches your calendar without your approval.
       </p>
     </div>
   );

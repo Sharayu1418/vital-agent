@@ -630,6 +630,10 @@ button.ghost-danger:hover { border-color: var(--danger); }
   transition: all 0.15s;
 }
 .bud-actions button:hover { border-color: var(--accent); }
+.bud-actions .bud-action-primary {
+  border-color: var(--accent); color: var(--accent); background: var(--accent-soft);
+  font-weight: 650;
+}
 
 .bud-mine-row {
   display: flex; align-items: center; justify-content: space-between;

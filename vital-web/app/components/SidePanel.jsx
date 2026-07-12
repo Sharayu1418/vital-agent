@@ -132,7 +132,7 @@ function LocationPreference({ location, onChange }) {
 }
 
 export default function SidePanel({
-  sleep, events, memories, onForget, open, onClose, location, onLocationChange,
+  sleep, events, memories, onForget, open, onClose, location, onLocationChange, userName,
 }) {
   const nights = sleep?.nights ?? [];
   const avg = nights.length
@@ -148,8 +148,7 @@ export default function SidePanel({
         <section className="card">
           <h3>Sleep</h3>
           {nights.length === 0 ? (
-            <p className="side-hint">No data yet. Upload a sleep file or just
-              tell VITAL how you slept.</p>
+            <p className="side-hint">No sleep data yet. Tell me how last night went.</p>
           ) : (
             <>
               <div className="stat-row">
@@ -170,8 +169,8 @@ export default function SidePanel({
         <section className="card">
           <h3>Your plan</h3>
           {!events?.length ? (
-            <p className="side-hint">Approved plans land here. Try “plan my
-              weekend”.</p>
+            <p className="side-hint">Nothing planned yet. Ask me to shape your
+              day or weekend.</p>
           ) : (
             events.map((e, i) => (
               <div className="event" key={i}>
@@ -183,15 +182,15 @@ export default function SidePanel({
           )}
         </section>
 
-        <Buddies />
+        <Buddies suggestedName={userName && userName !== "-" ? userName : ""} />
 
         <LocationPreference location={location} onChange={onLocationChange} />
 
         <section className="card">
           <h3>What VITAL knows</h3>
           {!memories?.length ? (
-            <p className="side-hint">It learns stable facts as you chat.
-              Visible and deletable, always.</p>
+            <p className="side-hint">Useful details from your chats appear
+              here. Remove them anytime.</p>
           ) : (
             memories.map((m) => (
               <div className="memory-row" key={m.key}>
