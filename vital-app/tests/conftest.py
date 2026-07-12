@@ -18,6 +18,7 @@ os.environ["API_AUTH_TOKEN"] = ""
 os.environ["DEBUG_ENDPOINTS"] = "false"
 os.environ["DATABASE_URL"] = ""
 os.environ["TICKETMASTER_API_KEY"] = ""
+os.environ["AUTH_REQUIRED"] = "false"  # anonymous access in tests by default
 
 import pytest
 

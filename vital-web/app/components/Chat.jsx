@@ -6,7 +6,7 @@ import {
   getRecognitionCtor, isSynthesisSupported, joinTranscript,
   recognitionErrorText, stripMarkdownForSpeech,
 } from "../lib/speech";
-import { dailyLine, firstNameFrom } from "../lib/theme";
+import { dailyLine, firstNameFrom, timeGreeting } from "../lib/theme";
 import {
   MicIcon, SpeakerIcon, StopIcon, ThumbDownIcon, ThumbUpIcon,
 } from "./icons";
@@ -24,19 +24,11 @@ const STARTERS = [
 ];
 
 function greeting(name) {
-  const h = new Date().getHours();
+  const g = timeGreeting(new Date().getHours());
   // "-" means the user skipped the name ask; greet warmly but namelessly
   const who = name && name !== "-" ? `, ${name}` : "";
-  if (h >= 5 && h < 12) {
-    return { hi: `Good morning${who}`, line: "Where should today's energy go?" };
-  }
-  if (h < 17) {
-    return { hi: `Good afternoon${who}`, line: "Time for a reset, an idea, or a plan?" };
-  }
-  if (h < 22) {
-    return { hi: `Good evening${who}`, line: "How did today treat you?" };
-  }
-  return { hi: `Up late${who}?`, line: "Let's look after tomorrow-you." };
+  const tail = g.hi === "Up late" ? "?" : "";  // "Up late, Sam?" reads right
+  return { hi: `${g.hi}${who}${tail}`, line: g.line };
 }
 
 /* One-time, low-pressure name ask. Enter saves; "skip" never asks again.

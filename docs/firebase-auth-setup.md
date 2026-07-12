@@ -36,16 +36,31 @@ These are public web configuration, not secrets — they ship in the JS
 bundle by design. Real access control is the backend's token verification.
 Redeploy the frontend after saving.
 
+With these set, the web app is **OAuth-first**: it shows a login screen and
+renders nothing else — no chat, panels, buddy board, upload, or threads —
+until the user signs in with Google. Do **not** set `NEXT_PUBLIC_ALLOW_ANON`
+in production; that flag exists only to run the app locally without Firebase
+config (see `vital-web/.env.example`).
+
 ## 3. Cloud Run (backend)
 
-Add two environment variables to the service and redeploy:
+Add these environment variables to the service and redeploy:
 
 ```
 FIREBASE_AUTH_ENABLED=true
 FIREBASE_PROJECT_ID=vital-agent-dev
+AUTH_REQUIRED=true
 ```
 
-That's all. The Admin SDK authenticates with **Application Default
+`AUTH_REQUIRED=true` makes VITAL OAuth-first: every user-data route
+(`/chat`, `/upload/health`, `/sleep/recent`, `/calendar`, `/memories`,
+`/feedback`, `/threads/*`, and the whole buddy board) returns 401 for
+unauthenticated callers instead of minting an anonymous session. Public
+routes (`/healthz`, `/docs`, `/openapi.json`) stay open. Startup refuses
+to boot if `AUTH_REQUIRED=true` with no authenticator configured, so you
+can't accidentally ship a wall of dead 401s.
+
+The Admin SDK authenticates with **Application Default
 Credentials** — on Cloud Run that's the service's own identity. Do **not**
 create or mount a service-account JSON key; none is needed, and the
 backend refuses to use one because the code never reads one. If Firebase

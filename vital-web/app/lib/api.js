@@ -22,6 +22,15 @@ export function setTokenProvider(fn) {
   tokenProvider = fn;
 }
 
+/* Called when a SIGNED-IN request stays 401 even after a forced token
+ * refresh — the session is genuinely dead and the user must sign in again.
+ * page.jsx registers a handler that surfaces "Please sign in again." */
+let onUnauthorized = null;
+
+export function setUnauthorizedHandler(fn) {
+  onUnauthorized = fn;
+}
+
 export async function request(path, options = {}, retried = false) {
   // token first; a provider error aborts the request before fetch runs.
   // On the retry pass this forces a refresh — if THAT fails, same rule:
@@ -32,8 +41,9 @@ export async function request(path, options = {}, retried = false) {
   const res = await fetch(`${API}${path}`, {
     credentials: "include", ...options, headers,
   });
-  if (res.status === 401 && token && !retried) {
-    return request(path, options, true);     // exactly one retry, then done
+  if (res.status === 401 && token) {
+    if (!retried) return request(path, options, true);  // one retry, then done
+    onUnauthorized?.();  // refreshed token still rejected: re-auth needed
   }
   return res;
 }

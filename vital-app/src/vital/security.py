@@ -60,13 +60,21 @@ def configured_token() -> str | None:
 @lru_cache
 def _firebase_app():
     """Admin SDK app, initialized once with ADC (Cloud Run service identity
-    locally: `gcloud auth application-default login`). No JSON key, ever."""
+    locally: `gcloud auth application-default login`). No JSON key, ever.
+
+    Adopt the existing default app if one is already registered. The
+    lru_cache guards the common path, but a cache_clear() (tests, startup
+    re-validation) or in-process reload would otherwise re-enter here and
+    initialize_app() raises 'default app already exists' — so check first."""
     import firebase_admin
     from firebase_admin import credentials
 
-    return firebase_admin.initialize_app(
-        credentials.ApplicationDefault(),
-        {"projectId": settings().firebase_project_id})
+    try:
+        return firebase_admin.get_app()
+    except ValueError:
+        return firebase_admin.initialize_app(
+            credentials.ApplicationDefault(),
+            {"projectId": settings().firebase_project_id})
 
 
 def _firebase_verify(token: str) -> dict:
@@ -137,6 +145,13 @@ def resolve_identity(req_user_id: str, auth: AuthContext,
                                                     candidate)
         return user_id, None
 
+    # OAuth-first production: anonymous callers don't get identities at all.
+    # Every user-data route resolves identity through here, so this one
+    # check covers chat/approve/upload/sleep/calendar/threads/feedback/
+    # memories and the whole buddy board.
+    if settings().auth_required:
+        raise HTTPException(status_code=401, detail="sign-in required")
+
     if valid_session:
         user_id = f"anon-{session_cookie}"
         if not storage.user_id_is_linked(user_id):
@@ -161,6 +176,11 @@ def validate_startup() -> None:
             "Refusing to start: SameSite=None cookies MUST be Secure — "
             "browsers reject them otherwise, and plaintext cross-site "
             "cookies would be wrong anyway.")
+    if cfg.auth_required and not (cfg.firebase_auth_enabled or configured_token()):
+        raise RuntimeError(
+            "Refusing to start: AUTH_REQUIRED=true but no authenticator is "
+            "configured — enable FIREBASE_AUTH_ENABLED or set API_AUTH_TOKEN, "
+            "or every user-data route would be a dead 401.")
     if cfg.firebase_auth_enabled:
         if not (cfg.firebase_project_id or "").strip():
             raise RuntimeError(

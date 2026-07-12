@@ -276,6 +276,104 @@ def test_thread_delete_rejects_invalid_ids(monkeypatch):
     assert r.status_code in (404, 422)   # path-safe either way
 
 
+# ---------- AUTH_REQUIRED=true (OAuth-first production mode) ----------
+
+@pytest.fixture
+def auth_required(monkeypatch):
+    monkeypatch.setenv("AUTH_REQUIRED", "true")
+    settings.cache_clear()
+    yield
+    settings.cache_clear()
+
+
+def test_require_auth_rejects_anonymous_user_data_routes(monkeypatch, auth_required):
+    client, fake = _client(monkeypatch)
+    r = client.post("/chat", json={"message": "hi"})
+    assert r.status_code == 401
+    assert fake.seen == []                          # no identity was minted
+    assert security.SESSION_COOKIE not in r.cookies  # and no session either
+    for path in ("/sleep/recent", "/calendar", "/memories",
+                 "/activity-posts", "/threads", "/threads/t1/messages"):
+        assert client.get(path).status_code == 401, path
+    assert client.post("/feedback", json={"rating": "up"}).status_code == 401
+    assert client.post("/upload/health",
+                       files={"file": ("s.csv", b"date,duration_min\n2026-07-01,420\n")}
+                       ).status_code == 401
+    assert client.delete("/threads/t1").status_code == 401
+
+
+def test_require_auth_keeps_public_routes_public(monkeypatch, auth_required):
+    client, _ = _client(monkeypatch)
+    assert client.get("/healthz").status_code == 200
+    assert client.get("/openapi.json").status_code == 200
+    assert client.get("/docs").status_code == 200
+    assert client.post("/auth/logout").status_code == 200  # sign-out must work
+
+
+def test_require_auth_firebase_token_still_works(monkeypatch, auth_required):
+    client, fake = _client(monkeypatch)
+    r = client.post("/chat", json={"message": "hi", "thread_id": "t1"},
+                    headers=_bearer("tok-alice"))
+    assert r.status_code == 200
+    assert len(fake.seen) == 1
+
+
+def test_require_auth_internal_token_still_works(monkeypatch, auth_required):
+    monkeypatch.setenv("API_AUTH_TOKEN", "s3cret")
+    settings.cache_clear()
+    client, fake = _client(monkeypatch)
+    r = client.post("/chat", json={"message": "hi", "user_id": "ops", "thread_id": "t1"},
+                    headers=_bearer("s3cret"))
+    assert r.status_code == 200
+    assert fake.seen[0] == "ops:t1"
+
+
+def test_firebase_app_adopts_existing_default_app(monkeypatch):
+    # a cache_clear() (tests / startup re-validation) must not re-init and
+    # raise 'default app already exists' — get_app() is tried first
+    inits = []
+
+    class _FakeApp: ...
+
+    fake = _FakeApp()
+    state = {"app": None}
+
+    def get_app():
+        if state["app"] is None:
+            raise ValueError("no default app")
+        return state["app"]
+
+    def initialize_app(*_a, **_k):
+        inits.append(1)
+        state["app"] = fake
+        return fake
+
+    fake_admin = type("m", (), {"get_app": staticmethod(get_app),
+                                "initialize_app": staticmethod(initialize_app)})
+    fake_creds = type("c", (), {"ApplicationDefault": staticmethod(lambda: None)})
+    monkeypatch.setitem(__import__("sys").modules, "firebase_admin", fake_admin)
+    monkeypatch.setitem(__import__("sys").modules, "firebase_admin.credentials",
+                        fake_creds)
+    monkeypatch.setattr(fake_admin, "credentials", fake_creds, raising=False)
+
+    security._firebase_app.cache_clear()
+    first = security._firebase_app()
+    security._firebase_app.cache_clear()   # simulate reload / re-validation
+    second = security._firebase_app()
+    assert first is second is fake
+    assert sum(inits) == 1                 # initialized once, adopted after
+    security._firebase_app.cache_clear()
+
+
+def test_startup_refuses_auth_required_without_authenticator(monkeypatch):
+    monkeypatch.setenv("AUTH_REQUIRED", "true")
+    monkeypatch.setenv("FIREBASE_AUTH_ENABLED", "false")
+    monkeypatch.setenv("API_AUTH_TOKEN", "")
+    settings.cache_clear()
+    with pytest.raises(RuntimeError, match="AUTH_REQUIRED"):
+        security.validate_startup()
+
+
 def test_logout_expires_cookie_and_keeps_data(monkeypatch):
     client, fake = _client(monkeypatch)
     client.post("/chat", json={"message": "anon", "thread_id": "t1"})

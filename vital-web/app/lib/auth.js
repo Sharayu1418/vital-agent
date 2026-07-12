@@ -63,6 +63,26 @@ export async function signOutUser() {
 
 /* ---------- pure helpers (node-testable) ---------- */
 
+/* Local-dev escape hatch: with Firebase unconfigured, the app may run
+ * anonymously ONLY when this flag is set (never in production, where the
+ * Firebase env vars exist and the gate demands sign-in). */
+export function anonAllowed() {
+  return process.env.NEXT_PUBLIC_ALLOW_ANON === "1";
+}
+
+/* The OAuth-first gate, as a pure decision so it's testable:
+ * "loading"      → auth state unknown: render neither app nor login
+ * "login"        → configured, signed out: login screen only
+ * "unconfigured" → no Firebase config and no anon escape: helpful message
+ * "app"          → signed in (or explicitly-allowed anonymous local dev)
+ * Data loading and user-data API calls are allowed ONLY in "app". */
+export function gateFor({ ready, user, configured, allowAnon }) {
+  if (!ready) return "loading";
+  if (user) return "app";
+  if (!configured) return allowAnon ? "app" : "unconfigured";
+  return "login";
+}
+
 export const REDIRECT_FALLBACK_CODES = new Set([
   "auth/popup-blocked",
   "auth/operation-not-supported-in-this-environment",

@@ -6,6 +6,23 @@ export function themeForHour(hour) {
   return hour >= 5 && hour < 12 ? "light" : "dark";
 }
 
+/* The time-of-day greeting in VITAL's voice — shared by the chat hero and
+ * the sign-in screen so the app sounds the same before and after login.
+ * Nameless; callers append a name if they have one. */
+export function timeGreeting(hour) {
+  if (hour >= 5 && hour < 12) {
+    return { hi: "Good morning", line: "Where should today's energy go?" };
+  }
+  if (hour >= 12 && hour < 17) {
+    return { hi: "Good afternoon", line: "Time for a reset, an idea, or a plan?" };
+  }
+  if (hour >= 17 && hour < 22) {
+    return { hi: "Good evening", line: "How did today treat you?" };
+  }
+  // 22:00–04:59 — the small hours read as night, matching themeForHour
+  return { hi: "Up late", line: "Let's look after tomorrow-you." };
+}
+
 /* Short, gentle lines rotated once per day. Human tone, no productivity
  * guilt. Deterministic so SSR and client agree within a day. */
 export const DAILY_LINES = [

@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     # Firebase ID tokens via the Admin SDK using ADC (never a JSON key file).
     firebase_auth_enabled: bool = False
     firebase_project_id: str | None = None
+    # OAuth-first: when true, user-data routes reject unauthenticated
+    # callers with 401 instead of minting anonymous session identities.
+    # False locally (tests run offline, anonymous dev still works);
+    # TRUE in production. Public routes (/healthz, /docs) stay public.
+    auth_required: bool = False
 
     # --- Security (safe-by-default: both OFF unless explicitly set) ---
     # Shared bearer token for trusted callers (your frontend's backend).

@@ -4,14 +4,17 @@
  * thread list and theme. */
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { LoadingScreen, LoginScreen, UnconfiguredScreen } from "./components/AuthGate";
 import Chat from "./components/Chat";
 import { MenuIcon, MoonIcon, SpeakerIcon, UploadIcon } from "./components/icons";
 import Sidebar from "./components/Sidebar";
 import SidePanel from "./components/SidePanel";
-import { api, setTokenProvider } from "./lib/api";
+import { api, setTokenProvider, setUnauthorizedHandler } from "./lib/api";
 import {
-  clearSessionTransport, idToken, signInWithGoogle, signOutUser, watchAuth,
+  anonAllowed, clearSessionTransport, gateFor, idToken, signInWithGoogle,
+  signOutUser, watchAuth,
 } from "./lib/auth";
+import { firebaseConfigured } from "./lib/firebase";
 import { createGenerationGuard } from "./lib/guard";
 import { isSynthesisSupported } from "./lib/speech";
 import { applyEvent, initialStream, shouldKeepBubble, sseEvents } from "./lib/stream";
@@ -63,6 +66,7 @@ export default function Home() {
     // FIRST callback is the "initial auth state known" signal that unlocks
     // account-scoped loading below.
     setTokenProvider(idToken);
+    setUnauthorizedHandler(() => setAuthError("Please sign in again."));
     let unsubscribe = () => {};
     watchAuth((user) => {
       setAuthUser(user);
@@ -72,10 +76,16 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ---- threads + panel data: only once the auth state is known, and again
-  // ---- on sign-in/out (identity changes what the backend returns) ----
+  // OAuth-first gate: "loading" | "login" | "unconfigured" | "app".
+  // Nothing renders and NO user-data API runs until this says "app".
+  const gate = gateFor({ ready: authReady, user: authUser,
+                         configured: firebaseConfigured(),
+                         allowAnon: anonAllowed() });
+
+  // ---- threads + panel data: ONLY in "app" (signed in, or explicitly
+  // ---- allowed anonymous local dev), and again on account change ----
   useEffect(() => {
-    if (!authReady) return undefined;
+    if (gate !== "app") return undefined;
     const live = guardRef.current.begin();  // new identity epoch
     (async () => {
       let list = loadThreads(localStorage);
@@ -97,7 +107,7 @@ export default function Home() {
     })();
     return () => guardRef.current.invalidate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authReady, authUser?.uid]);
+  }, [gate, authUser?.uid]);
 
   // ---- account controls (Sidebar) ----
   async function signIn() {
@@ -378,6 +388,15 @@ export default function Home() {
                prompt: "Plan my weekend around my energy levels" };
     }
     return null;
+  }
+
+  // OAuth-first gate: never render the app shell (or run its data loads)
+  // until the user is signed in. This is what keeps the product UI from
+  // flashing behind the Google popup.
+  if (gate === "loading") return <LoadingScreen />;
+  if (gate === "unconfigured") return <UnconfiguredScreen />;
+  if (gate === "login") {
+    return <LoginScreen busy={authBusy} error={authError} onSignIn={signIn} />;
   }
 
   return (

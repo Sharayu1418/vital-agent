@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { DAILY_LINES, dailyLine, firstNameFrom, themeForHour } from "../app/lib/theme.js";
+import {
+  DAILY_LINES, dailyLine, firstNameFrom, themeForHour, timeGreeting,
+} from "../app/lib/theme.js";
 
 test("mornings are light, the rest of the day is dark", () => {
   assert.equal(themeForHour(5), "light");
@@ -12,6 +14,22 @@ test("mornings are light, the rest of the day is dark", () => {
   assert.equal(themeForHour(23), "dark");
   assert.equal(themeForHour(0), "dark");
   assert.equal(themeForHour(4), "dark");
+});
+
+test("timeGreeting matches the theme's hours and speaks VITAL's voice", () => {
+  // greeting brackets align with themeForHour's morning/rest-of-day split
+  assert.equal(timeGreeting(5).hi, "Good morning");
+  assert.equal(timeGreeting(11).hi, "Good morning");
+  assert.equal(timeGreeting(12).hi, "Good afternoon");
+  assert.equal(timeGreeting(16).hi, "Good afternoon");
+  assert.equal(timeGreeting(17).hi, "Good evening");
+  assert.equal(timeGreeting(21).hi, "Good evening");
+  assert.equal(timeGreeting(22).hi, "Up late");
+  assert.equal(timeGreeting(3).hi, "Up late");
+  // every bracket carries a warm, non-empty line (login + hero share this)
+  for (const h of [6, 13, 19, 23]) {
+    assert.ok(timeGreeting(h).line.length > 0);
+  }
 });
 
 test("daily line is stable within a day and drawn from the list", () => {
