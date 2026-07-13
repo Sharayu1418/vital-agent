@@ -140,7 +140,7 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .new-chat:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 
 .sidebar-history {
-  min-height: 92px; flex: 1;
+  min-height: 0; flex: 1 1 0;
   display: flex; flex-direction: column; gap: 6px;
 }
 .sidebar-label, .sidebar-memory h2 {
@@ -151,13 +151,15 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   min-height: 0; flex: 1; overflow-y: auto;
   display: flex; flex-direction: column; gap: 2px; padding-right: 2px;
   scrollbar-width: thin; scrollbar-color: var(--glass-border) transparent;
+  overscroll-behavior: contain;
 }
 .thread-list::-webkit-scrollbar, .sidebar-memory-list::-webkit-scrollbar { width: 5px; }
 .thread-list::-webkit-scrollbar-thumb, .sidebar-memory-list::-webkit-scrollbar-thumb {
   background: var(--glass-border); border-radius: 999px;
 }
 .sidebar-memory {
-  flex: 0 1 auto; max-height: min(24dvh, 190px); overflow: hidden;
+  min-height: 0; flex: 1 1 0; overflow: hidden;
+  display: flex; flex-direction: column;
   padding: 10px 4px; border-top: 1px solid var(--glass-border);
 }
 .sidebar-memory-head {
@@ -173,8 +175,9 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 }
 .sidebar-memory > .side-hint { padding: 0 4px; }
 .sidebar-memory-list {
-  max-height: 142px; overflow-y: auto; padding-right: 2px;
+  min-height: 0; flex: 1; overflow-y: auto; padding-right: 2px;
   scrollbar-width: thin; scrollbar-color: var(--glass-border) transparent;
+  overscroll-behavior: contain;
 }
 .sidebar-memory .memory-row { align-items: flex-start; font-size: 12px; line-height: 1.4; }
 .sidebar-memory .memory-row > span {
