@@ -133,3 +133,51 @@ def test_thread_messages_surfaces_pending_approval(monkeypatch):
 def test_thread_messages_rejects_bad_thread_id(monkeypatch):
     client = _client(monkeypatch)
     assert client.get("/threads/" + "x" * 65 + "/messages").status_code == 422
+
+
+# ---------- P0-1: sync handlers now run in a threadpool ----------
+
+def test_sync_handlers_do_not_leak_identity_between_concurrent_callers(monkeypatch):
+    """P0-1 regression guard.
+
+    /sleep/recent and friends are now plain `def`, so FastAPI dispatches them
+    to a threadpool instead of blocking the event loop. Each dispatch must
+    still resolve identity from the CALLER's session and set the contextvar
+    itself — if a worker thread ever inherited a previous request's
+    current_user_id, two users hitting the panel at once would read each
+    other's sleep data. Fire both concurrently and assert strict isolation.
+    """
+    import threading
+
+    client_a = _client(monkeypatch)
+    client_b = _client(monkeypatch)
+    user_a = _session_user(client_a)
+    user_b = _session_user(client_b)
+    assert user_a != user_b
+
+    # MANUAL logs, deliberately: storage.log_sleep() reads current_user_id,
+    # so this is the path that actually breaks when the contextvar leaks.
+    # (Uploaded rows are fetched by explicit user_id and would pass either way.)
+    storage.current_user_id.set(user_a)
+    storage.log_sleep("23:00", "07:00", 3)      # 480 min
+    storage.current_user_id.set(user_b)
+    storage.log_sleep("01:00", "06:00", 2)      # 300 min
+    storage.current_user_id.set("someone-else-entirely")  # poison the parent context
+
+    results = {"a": [], "b": []}
+
+    def hit(name, client):
+        for _ in range(5):  # repeat: thread reuse is what would expose a leak
+            results[name].append(
+                [n["duration_min"] for n in client.get("/sleep/recent").json()["nights"]])
+
+    threads = [threading.Thread(target=hit, args=("a", client_a)),
+               threading.Thread(target=hit, args=("b", client_b))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # every single response, on every worker thread, sees only its own night
+    assert results["a"] == [[480]] * 5, results["a"]
+    assert results["b"] == [[300]] * 5, results["b"]

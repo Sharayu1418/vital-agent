@@ -15,6 +15,7 @@ from fastapi import (Cookie, Depends, FastAPI, Header, HTTPException, Response,
                      UploadFile)
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
+from starlette.concurrency import run_in_threadpool
 
 from vital import buddies, guardrails, ingest, memory, metrics, storage
 from vital.config import settings
@@ -119,8 +120,25 @@ async def healthz() -> dict:
     return {"status": "ok"}
 
 
+# ---------------------------------------------------------------------------
+# Blocking-I/O rule (P0-1 fix).
+#
+# storage.py is fully SYNCHRONOUS (sqlite3, or a sync psycopg ConnectionPool).
+# Calling it from an `async def` handler blocks the whole event loop for the
+# duration of the query — which on a single Cloud Run instance freezes every
+# other in-flight request, including SSE chat streams mid-sentence.
+#
+# So: a handler that only does synchronous work is declared `def`, NOT
+# `async def`. FastAPI runs sync handlers in a threadpool automatically, so
+# the loop stays free. Handlers that genuinely need to await (the graph, the
+# request body) stay `async def` and wrap their storage calls in
+# run_in_threadpool().
+#
+# When adding a route: if it never awaits, declare it `def`.
+# ---------------------------------------------------------------------------
+
 @app.post("/auth/logout")
-async def logout(response: Response) -> dict:
+def logout(response: Response) -> dict:
     """Server-side half of sign-out: expire the anonymous session cookie so
     the browser doesn't keep an identity that may have been linked to the
     account. (The frontend clears Firebase + local state; security does NOT
@@ -217,7 +235,9 @@ def _graph_stream(graph_input, config, user_id: str):
         values = getattr(snap, "values", None) or {}
         est = guardrails.estimate_tokens(str(graph_input)[:2000], "x" * streamed_chars)
         try:
-            guardrails.record_usage(user_id, est)
+            # threadpool: a synchronous DB write here would block the event
+            # loop at the exact moment other users' streams are mid-flight
+            await run_in_threadpool(guardrails.record_usage, user_id, est)
         except Exception:
             pass  # accounting must never break the stream
         metrics.log_turn(user_id, str(config["configurable"]["thread_id"]),
@@ -236,7 +256,8 @@ async def chat(req: ChatRequest, ident: Identity = Depends()) -> EventSourceResp
     if ident.auth.kind == "firebase":
         # signed-in users get a cross-device thread index (title = first
         # message; later turns only bump updated_at)
-        storage.upsert_user_thread(user_id, req.thread_id, req.message)
+        await run_in_threadpool(storage.upsert_user_thread,
+                                user_id, req.thread_id, req.message)
 
     # Guardrail 1: crisis messages bypass the agent pipeline entirely —
     # deterministic path, no routing, no tools, no LLM dependency.
@@ -250,7 +271,7 @@ async def chat(req: ChatRequest, ident: Identity = Depends()) -> EventSourceResp
         return response
 
     # Guardrail 2: per-user daily token budget
-    if guardrails.budget_exceeded(user_id):
+    if await run_in_threadpool(guardrails.budget_exceeded, user_id):
         raise HTTPException(status_code=429, detail=guardrails.BUDGET_MESSAGE)
 
     config = {"configurable": {"thread_id": f"{user_id}:{req.thread_id}"}}
@@ -279,7 +300,7 @@ async def approve(req: ApprovalRequest,
     current_user_id.set(user_id)
     # budget applies here too: an 'edit' resume re-invokes the planner LLM,
     # so /approve must not be a budget bypass (Phase 4 review finding)
-    if guardrails.budget_exceeded(user_id):
+    if await run_in_threadpool(guardrails.budget_exceeded, user_id):
         raise HTTPException(status_code=429, detail=guardrails.BUDGET_MESSAGE)
     config = {"configurable": {"thread_id": f"{user_id}:{req.thread_id}"}}
     if not any(t.interrupts for t in getattr(await _aget_graph_state(config), "tasks", ())):
@@ -315,7 +336,7 @@ async def upload_health(file: UploadFile, response: Response,
 # ---------- Side-panel data endpoints (Phase 5 UI) ----------
 
 @app.get("/sleep/recent")
-async def sleep_recent(response: Response, ident: Identity = Depends()) -> dict:
+def sleep_recent(response: Response, ident: Identity = Depends()) -> dict:
     """Last 14 nights, merging manual logs with uploaded data (upload wins
     on date conflicts) — feeds the side-panel trend chart."""
     user_id, new_session = ident.resolve()
@@ -337,7 +358,7 @@ async def sleep_recent(response: Response, ident: Identity = Depends()) -> dict:
 
 
 @app.get("/calendar")
-async def calendar_view(response: Response, ident: Identity = Depends()) -> dict:
+def calendar_view(response: Response, ident: Identity = Depends()) -> dict:
     """Committed plan events — the side panel's 'Your plan' section."""
     user_id, new_session = ident.resolve()
     _set_session(response, new_session)
@@ -345,7 +366,7 @@ async def calendar_view(response: Response, ident: Identity = Depends()) -> dict
 
 
 @app.get("/threads")
-async def list_threads(response: Response, ident: Identity = Depends()) -> dict:
+def list_threads(response: Response, ident: Identity = Depends()) -> dict:
     """Thread index for the resolved identity — signed-in users get their
     list on any device. Never exposes user ids; only the caller's own rows.
     (Old anonymous-device thread ids can't be safely claimed by an account
@@ -357,8 +378,8 @@ async def list_threads(response: Response, ident: Identity = Depends()) -> dict:
 
 
 @app.delete("/threads/{thread_id}")
-async def delete_thread(thread_id: str, response: Response,
-                        ident: Identity = Depends()) -> dict:
+def delete_thread(thread_id: str, response: Response,
+                  ident: Identity = Depends()) -> dict:
     """Remove a thread from the CALLER'S sidebar index (user_threads is
     keyed by the server-resolved identity, so one user can never unlist
     another's row). This does NOT erase conversation checkpoints — it's
@@ -404,8 +425,8 @@ class FeedbackRequest(BaseModel):
 
 
 @app.post("/feedback")
-async def feedback(req: FeedbackRequest, response: Response,
-                   ident: Identity = Depends()) -> dict:
+def feedback(req: FeedbackRequest, response: Response,
+             ident: Identity = Depends()) -> dict:
     """Thumbs per response — the Phase 5 iteration loop. Also mirrored to
     metrics so rating trends show up next to latency/cost."""
     user_id, new_session = ident.resolve()
@@ -416,7 +437,7 @@ async def feedback(req: FeedbackRequest, response: Response,
 
 
 @app.get("/memories")
-async def list_memories(response: Response, ident: Identity = Depends()) -> dict:
+def list_memories(response: Response, ident: Identity = Depends()) -> dict:
     """What VITAL knows about you — transparency + debugging (Phase 2B)."""
     user_id, new_session = ident.resolve()
     _set_session(response, new_session)
@@ -424,8 +445,8 @@ async def list_memories(response: Response, ident: Identity = Depends()) -> dict
 
 
 @app.delete("/memories/{key}")
-async def delete_memory(key: str, response: Response,
-                        ident: Identity = Depends()) -> dict:
+def delete_memory(key: str, response: Response,
+                  ident: Identity = Depends()) -> dict:
     user_id, new_session = ident.resolve()
     _set_session(response, new_session)
     memory.forget(memory.get_store(), user_id, key)
@@ -490,8 +511,8 @@ class BuddyReport(BaseModel):
 
 
 @app.post("/activity-posts")
-async def create_activity_post(req: ActivityPostCreate, response: Response,
-                               ident: Identity = Depends()) -> dict:
+def create_activity_post(req: ActivityPostCreate, response: Response,
+                         ident: Identity = Depends()) -> dict:
     user_id, new_session = ident.resolve()
     _set_session(response, new_session)
     return {"post": _buddy_call(buddies.create_post, user_id, req.model_dump()),
@@ -499,12 +520,12 @@ async def create_activity_post(req: ActivityPostCreate, response: Response,
 
 
 @app.get("/activity-posts")
-async def search_activity_posts(response: Response, ident: Identity = Depends(),
-                                activity: str | None = None, city: str | None = None,
-                                time_window: str | None = None,
-                                skill_level: str | None = None,
-                                budget: str | None = None, vibe: str | None = None,
-                                include_own: bool = False) -> dict:
+def search_activity_posts(response: Response, ident: Identity = Depends(),
+                          activity: str | None = None, city: str | None = None,
+                          time_window: str | None = None,
+                          skill_level: str | None = None,
+                          budget: str | None = None, vibe: str | None = None,
+                          include_own: bool = False) -> dict:
     user_id, new_session = ident.resolve()
     _set_session(response, new_session)
     posts = buddies.search_posts(user_id, activity=activity, city=city,
@@ -514,15 +535,15 @@ async def search_activity_posts(response: Response, ident: Identity = Depends(),
 
 
 @app.get("/activity-posts/mine")
-async def my_activity_posts(response: Response, ident: Identity = Depends()) -> dict:
+def my_activity_posts(response: Response, ident: Identity = Depends()) -> dict:
     user_id, new_session = ident.resolve()
     _set_session(response, new_session)
     return {"posts": buddies.my_posts(user_id)}
 
 
 @app.patch("/activity-posts/{post_id}")
-async def update_activity_post(post_id: int, req: ActivityPostUpdate,
-                               response: Response, ident: Identity = Depends()) -> dict:
+def update_activity_post(post_id: int, req: ActivityPostUpdate,
+                         response: Response, ident: Identity = Depends()) -> dict:
     user_id, new_session = ident.resolve()
     _set_session(response, new_session)
     return {"post": _buddy_call(buddies.update_post, user_id, post_id,
@@ -530,8 +551,8 @@ async def update_activity_post(post_id: int, req: ActivityPostUpdate,
 
 
 @app.post("/activity-posts/{post_id}/request")
-async def request_to_join(post_id: int, req: BuddyRequestCreate,
-                          response: Response, ident: Identity = Depends()) -> dict:
+def request_to_join(post_id: int, req: BuddyRequestCreate,
+                    response: Response, ident: Identity = Depends()) -> dict:
     user_id, new_session = ident.resolve()
     _set_session(response, new_session)
     result = _buddy_call(buddies.create_request, user_id, post_id,
@@ -540,16 +561,16 @@ async def request_to_join(post_id: int, req: BuddyRequestCreate,
 
 
 @app.get("/activity-requests/mine")
-async def my_activity_requests(response: Response, ident: Identity = Depends()) -> dict:
+def my_activity_requests(response: Response, ident: Identity = Depends()) -> dict:
     user_id, new_session = ident.resolve()
     _set_session(response, new_session)
     return buddies.my_requests(user_id)
 
 
 @app.patch("/activity-requests/{request_id}")
-async def decide_activity_request(request_id: int, req: BuddyRequestDecision,
-                                  response: Response,
-                                  ident: Identity = Depends()) -> dict:
+def decide_activity_request(request_id: int, req: BuddyRequestDecision,
+                            response: Response,
+                            ident: Identity = Depends()) -> dict:
     user_id, new_session = ident.resolve()
     _set_session(response, new_session)
     return {"request": _buddy_call(buddies.decide_request, user_id,
@@ -557,16 +578,16 @@ async def decide_activity_request(request_id: int, req: BuddyRequestDecision,
 
 
 @app.post("/activity-posts/{post_id}/report")
-async def report_activity_post(post_id: int, req: BuddyReport, response: Response,
-                               ident: Identity = Depends()) -> dict:
+def report_activity_post(post_id: int, req: BuddyReport, response: Response,
+                         ident: Identity = Depends()) -> dict:
     user_id, new_session = ident.resolve()
     _set_session(response, new_session)
     return _buddy_call(buddies.report_post, user_id, post_id, req.reason)
 
 
 @app.post("/users/{public_user_key}/block")
-async def block_buddy_user(public_user_key: str, response: Response,
-                           ident: Identity = Depends()) -> dict:
+def block_buddy_user(public_user_key: str, response: Response,
+                     ident: Identity = Depends()) -> dict:
     user_id, new_session = ident.resolve()
     _set_session(response, new_session)
     return _buddy_call(buddies.block_user, user_id, public_user_key)
