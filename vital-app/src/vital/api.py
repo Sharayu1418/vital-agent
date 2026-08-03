@@ -200,18 +200,58 @@ def _graph_stream(graph_input, config, user_id: str):
         t0 = time.monotonic()
         streamed_tokens = False
         streamed_chars = 0
+        # P0-5: real provider counts, summed across EVERY model call in the
+        # turn. Read the remaining allowance once up front so we can stop
+        # mid-turn — the pre-turn check alone let one turn run unbounded.
+        real_tokens = 0
+        remaining = await run_in_threadpool(guardrails.remaining_budget, user_id)
+        over_budget = False
         run_config = {**config, "recursion_limit": settings().recursion_limit}
-        async for event in graph.astream_events(graph_input, config=run_config, version="v2"):
-            kind = event["event"]
-            node = event.get("metadata", {}).get("langgraph_node", "")
-            if kind == "on_chat_model_stream" and node not in _NON_USER_FACING:
-                chunk = visible_text(event["data"]["chunk"].content)
-                if chunk:
-                    streamed_tokens = True
-                    streamed_chars += len(chunk)
-                    yield {"event": "token", "data": chunk}
-            elif kind == "on_tool_start":
-                yield {"event": "status", "data": f"{node}: using {event['name']}"}
+        events = graph.astream_events(graph_input, config=run_config, version="v2")
+        try:
+            async for event in events:
+                kind = event["event"]
+                node = event.get("metadata", {}).get("langgraph_node", "")
+                if kind == "on_chat_model_stream" and node not in _NON_USER_FACING:
+                    chunk = visible_text(event["data"]["chunk"].content)
+                    if chunk:
+                        streamed_tokens = True
+                        streamed_chars += len(chunk)
+                        yield {"event": "token", "data": chunk}
+                elif kind == "on_tool_start":
+                    yield {"event": "status", "data": f"{node}: using {event['name']}"}
+                elif kind == "on_chat_model_end":
+                    real_tokens += guardrails.tokens_from_model_end(event)
+                    if real_tokens >= remaining:
+                        over_budget = True
+                        # append rather than replace: a `message` event would
+                        # clobber whatever already streamed (stream.js)
+                        if streamed_tokens:
+                            yield {"event": "token",
+                                   "data": "\n\n" + guardrails.OVER_BUDGET_MID_TURN}
+                        else:
+                            yield {"event": "message",
+                                   "data": guardrails.OVER_BUDGET_MID_TURN}
+                        break
+        finally:
+            # breaking out of `async for` doesn't close the generator; the
+            # graph run must be torn down explicitly or it leaks a task
+            aclose = getattr(events, "aclose", None)
+            if aclose is not None:
+                await aclose()
+
+        if over_budget:
+            billed = max(1, real_tokens)
+            try:
+                await run_in_threadpool(guardrails.record_usage, user_id, billed)
+            except Exception:
+                pass
+            metrics.log_turn(user_id, str(config["configurable"]["thread_id"]),
+                             routing_hops=0, est_tokens=billed,
+                             duration_ms=int((time.monotonic() - t0) * 1000),
+                             kind="budget_abort")
+            yield {"event": "done", "data": ""}
+            return
 
         snap = await _aget_graph_state(config)
         pending = [intr for task in getattr(snap, "tasks", ())
@@ -233,17 +273,21 @@ def _graph_stream(graph_input, config, user_id: str):
         # identity, never from graph state — state can lag or be absent on a
         # paused thread, and billing the wrong identity breaks the budget.
         values = getattr(snap, "values", None) or {}
-        est = guardrails.estimate_tokens(str(graph_input)[:2000], "x" * streamed_chars)
+        heuristic = guardrails.estimate_tokens(str(graph_input)[:2000], "x" * streamed_chars)
+        # bill the provider's number when we have one; the heuristic is a
+        # fallback for fakes and providers that report no usage metadata
+        billed = real_tokens or heuristic
         try:
             # threadpool: a synchronous DB write here would block the event
             # loop at the exact moment other users' streams are mid-flight
-            await run_in_threadpool(guardrails.record_usage, user_id, est)
+            await run_in_threadpool(guardrails.record_usage, user_id, billed)
         except Exception:
             pass  # accounting must never break the stream
         metrics.log_turn(user_id, str(config["configurable"]["thread_id"]),
                          routing_hops=len(values.get("routing_history", []) or []),
-                         est_tokens=est,
-                         duration_ms=int((time.monotonic() - t0) * 1000))
+                         est_tokens=billed,
+                         duration_ms=int((time.monotonic() - t0) * 1000),
+                         heuristic_tokens=heuristic)
 
         yield {"event": "done", "data": ""}
     return stream()  # the generator object, not the function (review fix)
