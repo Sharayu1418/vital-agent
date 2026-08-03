@@ -58,6 +58,10 @@ from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings().frontend_origin],
+    # P1-12: a single allowed origin blocked every Vercel preview deployment,
+    # so branch previews looked completely broken. Opt-in and anchored — see
+    # the security note on preview_origin_regex in config.py.
+    allow_origin_regex=settings().preview_origin_regex,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["Authorization", "Content-Type", "X-Vital-Session"],
@@ -477,6 +481,24 @@ async def upload_health(file: UploadFile, response: Response,
 
 
 # ---------- Side-panel data endpoints (Phase 5 UI) ----------
+
+@app.get("/session")
+def session_bootstrap(response: Response, ident: Identity = Depends()) -> dict:
+    """Establish identity in ONE request, before the client fans out (P1-9).
+
+    Every identity-resolving route can mint a new anonymous session. The web
+    app used to load sleep, calendar and memories with Promise.all, so three
+    concurrent requests could each mint a DIFFERENT session id; last cookie
+    written won, and anything stored under the losers was orphaned. Awaiting
+    this once first means the cookie exists before anything runs in parallel.
+
+    Returns nothing identifying — the session travels in the cookie (or the
+    X-Vital-Session header for the mobile client).
+    """
+    _, new_session = ident.resolve()
+    _set_session(response, new_session)
+    return {"ready": True}
+
 
 @app.get("/sleep/recent")
 def sleep_recent(response: Response, ident: Identity = Depends()) -> dict:
