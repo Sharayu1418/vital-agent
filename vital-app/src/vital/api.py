@@ -9,6 +9,8 @@ Identity model (interim until real auth in Phase 5) — see security.py:
 - Debug routes exist only with DEBUG_ENDPOINTS=true, which refuses to
   boot without a token, and always require that token.
 """
+import xml.etree.ElementTree as ET
+import zipfile
 from contextlib import asynccontextmanager
 
 from fastapi import (Cookie, Depends, FastAPI, Header, HTTPException, Response,
@@ -355,24 +357,75 @@ async def approve(req: ApprovalRequest,
     return response
 
 
+MAX_UPLOAD_BYTES = 500 * 1024 * 1024
+_UPLOAD_CHUNK = 1024 * 1024
+
+
+async def _spool_upload(file: UploadFile):
+    """Copy the upload to a temp file, aborting the moment it exceeds the cap.
+
+    The previous code did `content = await file.read()` and checked the size
+    afterwards — so a 300MB body was fully resident in memory BEFORE the 413
+    could fire, and the container was OOM-killed instead of answering. Here
+    the counter is checked per chunk, so an oversized upload costs one chunk
+    of memory and returns a clean 413, and peak RSS stays flat regardless of
+    file size.
+
+    tempfile.TemporaryFile, not SpooledTemporaryFile: zipfile requires a
+    seekable object, and SpooledTemporaryFile only grew .seekable() in 3.11.
+    A real file object is always seekable, and the extra syscalls on small
+    CSVs are not worth the version coupling. Deleted on close.
+    """
+    import tempfile
+
+    spool = tempfile.TemporaryFile()
+    size = 0
+    try:
+        while chunk := await file.read(_UPLOAD_CHUNK):
+            size += len(chunk)
+            if size > MAX_UPLOAD_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"file too large ({MAX_UPLOAD_BYTES // (1024 * 1024)}MB max)")
+            await run_in_threadpool(spool.write, chunk)
+    except BaseException:
+        spool.close()
+        raise
+    spool.seek(0)
+    return spool
+
+
 @app.post("/upload/health")
 async def upload_health(file: UploadFile, response: Response,
                         ident: Identity = Depends()) -> dict:
-    """Apple Health export.xml or a sleep CSV → normalized per-user store.
-    Anonymous users can upload too — their data lives under their session."""
+    """Apple Health export (.zip or .xml) or a sleep CSV → normalized
+    per-user store. Anonymous users can upload too — their data lives under
+    their session.
+
+    NOTE for deploys: Cloud Run caps HTTP/1.1 request bodies at 32MB. This
+    handler streams correctly, but the service also needs HTTP/2 enabled
+    before uploads above that size can reach it at all.
+    """
     user_id, new_session = ident.resolve()
     _set_session(response, new_session)
-    content = await file.read()
-    if len(content) > 50 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="file too large (50MB max)")
+    name = (file.filename or "").lower()
+    spool = await _spool_upload(file)
     try:
-        if (file.filename or "").endswith(".xml"):
-            rows = ingest.parse_apple_health_xml(content)
+        if name.endswith(".zip"):
+            rows = await run_in_threadpool(ingest.parse_apple_health_zip, spool)
+        elif name.endswith(".xml"):
+            rows = await run_in_threadpool(ingest.parse_apple_health_stream, spool)
         else:
-            rows = ingest.parse_sleep_csv(content)
+            rows = await run_in_threadpool(ingest.parse_sleep_csv, spool.read())
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    ingest.save_sleep_data(user_id, rows)
+    except ET.ParseError as exc:
+        raise HTTPException(status_code=422, detail=f"could not parse XML: {exc}")
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=422, detail="not a readable zip archive")
+    finally:
+        spool.close()
+    await run_in_threadpool(ingest.save_sleep_data, user_id, rows)
     return {"nights_imported": len(rows),
             "date_range": [rows[0]["date"], rows[-1]["date"]]}
 
