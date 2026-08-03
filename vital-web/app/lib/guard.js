@@ -34,3 +34,26 @@ export function createGenerationGuard() {
     },
   };
 }
+
+/* Thread guard — the identity guard's blind spot.
+ *
+ * createGenerationGuard only knows about WHO you are. A stream started in
+ * thread A stays "live" when you click into thread B, because the identity
+ * never changed — so A's tokens landed in B's message list. This guards
+ * WHERE the answer belongs.
+ *
+ *   const belongs = createThreadGuard(() => activeIdRef.current, "t-abc");
+ *   if (!belongs()) return;   // user moved to another chat: drop the chunk
+ *
+ * readActive is a getter, not a value: consume() closes over state that is
+ * already stale by the time chunks arrive, which is the whole bug.
+ */
+export function createThreadGuard(readActive, streamThreadId) {
+  return () => readActive() === streamThreadId;
+}
+
+/* Should this streamed chunk be written to the UI?
+ * Pure, so the rule is testable without React or a network. */
+export function shouldApplyChunk(live, belongs) {
+  return Boolean(live) && Boolean(belongs);
+}

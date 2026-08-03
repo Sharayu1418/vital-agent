@@ -273,7 +273,12 @@ def test_search_route_returns_others_posts_without_private_data():
     assert len(body["posts"]) == 1
     assert "safety_note" in body and "public places" in body["safety_note"]
     blob = str(body)
-    assert "user_id" not in blob and "anon-" not in blob and "518" not in blob
+    assert "user_id" not in blob and "anon-" not in blob
+    # Match the whole number, not the "518" fragment: owner_key is 16 hex
+    # chars, so ~0.3% of runs contain "518" by chance and the old assertion
+    # failed at random (roughly 1 CI run in 300).
+    assert "518-555-0123" not in blob and "5185550123" not in blob
+    assert "518-555" not in body["posts"][0].get("notes", "")
 
 
 def test_inactive_posts_hidden_from_search_route():

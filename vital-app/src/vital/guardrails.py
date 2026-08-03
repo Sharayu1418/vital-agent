@@ -42,12 +42,61 @@ def crisis_check(message: str) -> bool:
 
 
 def estimate_tokens(*texts: str) -> int:
-    """Rough: ~4 chars/token for English. Floor of 1 to always record use."""
+    """Rough chars/4 heuristic.
+
+    FALLBACK ONLY. This badly undercounts a real turn: it sees the request
+    string and the streamed reply, but not the conversation history resent
+    on every hop, the system prompts, tool call payloads and results, the
+    supervisor's own calls, the ReAct loop's internal turns, or the memory
+    writer. Measured against provider counts it runs roughly an order of
+    magnitude low. Use tokens_from_model_end() wherever the real usage
+    metadata is available; this exists for the crisis/short paths and for
+    test fakes that report no usage at all.
+    """
     return max(1, sum(len(t) for t in texts) // 4)
+
+
+def tokens_from_model_end(event: dict) -> int:
+    """Real token count from an `on_chat_model_end` astream_events payload.
+
+    Counts EVERY model call in a turn — supervisor routing, each ReAct hop
+    inside a specialist, the memory writer, the planner — because each one
+    emits its own on_chat_model_end. Returns 0 when the provider reports no
+    usage metadata (fakes, older integrations), so callers can fall back.
+
+    Shapes handled: AIMessage/AIMessageChunk.usage_metadata (LangChain's
+    normalized form), a plain dict, and LLMResult.llm_output.token_usage.
+    """
+    output = (event.get("data") or {}).get("output")
+    if output is None:
+        return 0
+
+    usage = getattr(output, "usage_metadata", None)
+    if usage is None and isinstance(output, dict):
+        usage = output.get("usage_metadata")
+    if not usage:
+        llm_output = getattr(output, "llm_output", None) or {}
+        if isinstance(llm_output, dict):
+            usage = llm_output.get("token_usage") or llm_output.get("usage_metadata")
+    if not usage or not isinstance(usage, dict):
+        return 0
+
+    total = usage.get("total_tokens")
+    if total:
+        return int(total)
+    return (int(usage.get("input_tokens") or 0)
+            + int(usage.get("output_tokens") or 0))
 
 
 def budget_exceeded(user_id: str) -> bool:
     return storage.tokens_used_today(user_id) >= settings().daily_token_budget
+
+
+def remaining_budget(user_id: str) -> int:
+    """Tokens left today, floored at 0. Read once at the top of a turn so the
+    stream can abort mid-flight instead of discovering the overrun afterwards
+    (the pre-turn check alone let a single turn run unbounded)."""
+    return max(0, settings().daily_token_budget - storage.tokens_used_today(user_id))
 
 
 def record_usage(user_id: str, tokens: int) -> None:
@@ -56,3 +105,7 @@ def record_usage(user_id: str, tokens: int) -> None:
 
 BUDGET_MESSAGE = ("You've hit today's usage limit — it resets at midnight UTC. "
                   "This keeps VITAL free to run; thanks for understanding.")
+
+OVER_BUDGET_MID_TURN = (
+    "I've hit today's usage limit partway through this answer, so I've had to "
+    "stop here. It resets at midnight UTC.")

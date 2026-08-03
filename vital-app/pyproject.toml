@@ -36,3 +36,10 @@ src = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# test_firebase_auth.py imports `tests.test_api_security`, which needs the
+# project root on sys.path so `tests` resolves as a namespace package.
+# `python -m pytest` adds CWD implicitly, but the `pytest` console script
+# (what `uv run pytest` invokes) does not — so the suite passed one way and
+# failed 23 tests the other. Pin it here instead of depending on how pytest
+# happens to be launched.
+pythonpath = ["."]
