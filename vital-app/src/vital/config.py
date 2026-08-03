@@ -65,6 +65,10 @@ class Settings(BaseSettings):
 
     # --- Phase 4: guardrails ---
     daily_token_budget: int = 50_000   # per user; ~$0.05/day at Flash prices
+    # Hard ceiling on the crisis screen's model call. Past this we stop
+    # waiting and fall back to deterministic matching — a distressed person
+    # must never sit on a spinner because Vertex is slow.
+    crisis_timeout_seconds: float = 4.0
     recursion_limit: int = 25          # hard cap on graph steps per turn
 
     # --- Phase 5: frontend origin for CORS (Vercel URL in prod) ---

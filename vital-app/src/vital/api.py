@@ -177,6 +177,33 @@ def visible_text(content) -> str:
     return text if isinstance(text, str) else ""
 
 
+def config_for(user_id: str, thread_id: str) -> dict:
+    """The checkpointer key. Identity is part of it by construction, so a
+    caller can only ever address their own threads."""
+    return {"configurable": {"thread_id": f"{user_id}:{thread_id}"}}
+
+
+async def _recent_texts(config, limit: int = 4) -> list[str]:
+    """Last few human/ai texts on this thread, for crisis-screen context.
+
+    'I don't want to be here anymore' is unreadable without the turns
+    around it. Best-effort: a fresh thread or an unavailable checkpointer
+    yields no context, and the screen still runs on the message alone.
+    """
+    try:
+        snap = await _aget_graph_state(config)
+    except Exception:
+        return []
+    values = getattr(snap, "values", None) or {}
+    out = []
+    for m in (values.get("messages") or [])[-limit:]:
+        if getattr(m, "type", "") in ("human", "ai"):
+            text = visible_text(getattr(m, "content", None))
+            if text:
+                out.append(f"{m.type}: {text}")
+    return out
+
+
 async def _aget_graph_state(config):
     """Read graph state from async endpoints. Async-checkpointer graphs
     (prod: AsyncPostgresSaver) require aget_state; sync/in-memory graphs
@@ -305,9 +332,13 @@ async def chat(req: ChatRequest, ident: Identity = Depends()) -> EventSourceResp
         await run_in_threadpool(storage.upsert_user_thread,
                                 user_id, req.thread_id, req.message)
 
-    # Guardrail 1: crisis messages bypass the agent pipeline entirely —
-    # deterministic path, no routing, no tools, no LLM dependency.
-    if guardrails.crisis_check(req.message):
+    # Guardrail 1: crisis messages bypass the agent pipeline entirely — no
+    # routing, no tools. The screen itself is a small model call (P0-4:
+    # keywords caught 13% of real phrasings), run off the event loop and
+    # with the deterministic list as its fallback, so a model outage
+    # degrades this path rather than disabling it.
+    if await run_in_threadpool(guardrails.assess, req.message,
+                               await _recent_texts(config_for(user_id, req.thread_id))):
         async def crisis_stream():
             yield {"event": "message", "data": guardrails.CRISIS_RESPONSE}
             yield {"event": "done", "data": ""}
@@ -320,7 +351,7 @@ async def chat(req: ChatRequest, ident: Identity = Depends()) -> EventSourceResp
     if await run_in_threadpool(guardrails.budget_exceeded, user_id):
         raise HTTPException(status_code=429, detail=guardrails.BUDGET_MESSAGE)
 
-    config = {"configurable": {"thread_id": f"{user_id}:{req.thread_id}"}}
+    config = config_for(user_id, req.thread_id)
     graph_input = {"messages": [("user", req.message)], "user_id": user_id,
                    "routing_history": []}  # reset loop guard each turn
     response = EventSourceResponse(_graph_stream(graph_input, config, user_id))
@@ -344,11 +375,26 @@ async def approve(req: ApprovalRequest,
 
     user_id, new_session = ident.resolve(req.user_id)
     current_user_id.set(user_id)
+    config = config_for(user_id, req.thread_id)
+
+    # /approve carries up to 1000 characters of free-text feedback and was
+    # never screened (P0-4). Someone can just as easily say how they're
+    # really doing while editing a plan as while chatting.
+    if req.feedback.strip():
+        if await run_in_threadpool(guardrails.assess, req.feedback,
+                                   await _recent_texts(config)):
+            async def crisis_stream():
+                yield {"event": "message", "data": guardrails.CRISIS_RESPONSE}
+                yield {"event": "done", "data": ""}
+            metrics.log_turn(user_id, req.thread_id, 0, 0, 0, kind="crisis_response")
+            response = EventSourceResponse(crisis_stream())
+            _set_session(response, new_session)
+            return response
+
     # budget applies here too: an 'edit' resume re-invokes the planner LLM,
     # so /approve must not be a budget bypass (Phase 4 review finding)
     if await run_in_threadpool(guardrails.budget_exceeded, user_id):
         raise HTTPException(status_code=429, detail=guardrails.BUDGET_MESSAGE)
-    config = {"configurable": {"thread_id": f"{user_id}:{req.thread_id}"}}
     if not any(t.interrupts for t in getattr(await _aget_graph_state(config), "tasks", ())):
         raise HTTPException(status_code=409, detail="nothing awaiting approval on this thread")
     resume = ResumeCommand(resume={"action": req.action, "feedback": req.feedback})
@@ -500,7 +546,7 @@ async def thread_messages(thread_id: str, response: Response,
         raise HTTPException(status_code=422, detail="invalid thread id")
     user_id, new_session = ident.resolve()
     _set_session(response, new_session)
-    snap = await _aget_graph_state({"configurable": {"thread_id": f"{user_id}:{thread_id}"}})
+    snap = await _aget_graph_state(config_for(user_id, thread_id))
     values = getattr(snap, "values", None) or {}
     out = []
     for m in values.get("messages", []):
@@ -699,7 +745,7 @@ if settings().debug_endpoints:  # route does not exist unless explicitly enabled
         validate_startup() guarantees a token exists; require it unconditionally."""
         if not trusted:
             raise HTTPException(status_code=401, detail="token required")
-        snap = await _aget_graph_state({"configurable": {"thread_id": f"{user_id}:{thread_id}"}})
+        snap = await _aget_graph_state(config_for(user_id, thread_id))
         return {
             "routing_history": snap.values.get("routing_history", []),
             "message_count": len(snap.values.get("messages", [])),
