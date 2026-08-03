@@ -50,7 +50,7 @@ function NameAsk({ onSaveName, suggested = "" }) {
   );
 }
 
-function Composer({ input, setInput, onSend, busy, hero = false }) {
+function Composer({ input, setInput, onSend, busy, onStop, hero = false }) {
   const ref = useRef(null);
   const recRef = useRef(null);
   const baseRef = useRef("");      // what was typed before the mic session
@@ -123,15 +123,23 @@ function Composer({ input, setInput, onSend, busy, hero = false }) {
             : "Voice input is not supported in this browser."}
           disabled={!micSupported || busy}
           onClick={toggleMic}><MicIcon /></button>
-        <button className="send" aria-label="Send" disabled={busy || !input.trim()}
-          onClick={() => send(input)}>↑</button>
+        {/* While a turn is running the send button becomes a stop button.
+            Previously the composer was simply disabled for the whole turn,
+            so a long answer could not be interrupted at all. */}
+        {busy && onStop ? (
+          <button type="button" className="send stop" aria-label="Stop generating"
+            title="Stop generating" onClick={onStop}><StopIcon /></button>
+        ) : (
+          <button className="send" aria-label="Send" disabled={busy || !input.trim()}
+            onClick={() => send(input)}>↑</button>
+        )}
       </div>
       {micNote && <p className="mic-note rise">{micNote}</p>}
     </>
   );
 }
 
-function Hero({ onStarter, nudge, input, setInput, onSend, busy, userName,
+function Hero({ onStarter, nudge, input, setInput, onSend, busy, onStop, userName,
                 onSaveName, suggestedName = "" }) {
   const g = greeting(userName);
   const suggested = firstNameFrom(suggestedName);
@@ -141,7 +149,8 @@ function Hero({ onStarter, nudge, input, setInput, onSend, busy, userName,
       <h2 className="hero-title">{g.line}</h2>
       <p className="hero-quote">{dailyLine()}</p>
 
-      <Composer input={input} setInput={setInput} onSend={onSend} busy={busy} hero />
+      <Composer input={input} setInput={setInput} onSend={onSend} busy={busy}
+        onStop={onStop} hero />
 
       {userName === "" && (
         <NameAsk key={suggested} onSaveName={onSaveName} suggested={suggested} />
@@ -201,8 +210,8 @@ function PlanCard({ plan, editText, setEditText, onDecide, busy }) {
 
 export default function Chat({
   messages, pendingPlan, busy, thinking, input, setInput, editText, setEditText,
-  onSend, onDecide, onRate, nudge, autoRead = false, userName = null, onSaveName,
-  suggestedName = "",
+  onSend, onStop, onDecide, onRate, nudge, autoRead = false, userName = null,
+  onSaveName, suggestedName = "",
 }) {
   const bottomRef = useRef(null);
   const [ttsSupported, setTtsSupported] = useState(false);
@@ -258,7 +267,7 @@ export default function Chat({
           {empty && (
             <Hero onStarter={onSend} nudge={nudge}
               input={input} setInput={setInput} onSend={onSend} busy={busy}
-              userName={userName} onSaveName={onSaveName}
+              onStop={onStop} userName={userName} onSaveName={onSaveName}
               suggestedName={suggestedName} />
           )}
 
@@ -307,7 +316,8 @@ export default function Chat({
 
       {!empty && (
         <div className="composer">
-          <Composer input={input} setInput={setInput} onSend={onSend} busy={busy} />
+          <Composer input={input} setInput={setInput} onSend={onSend} busy={busy}
+            onStop={onStop} />
           <p className="composer-hint">VITAL can make mistakes. Plans always wait for your approval.</p>
         </div>
       )}
