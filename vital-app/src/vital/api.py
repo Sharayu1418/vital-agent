@@ -122,7 +122,18 @@ class ChatRequest(BaseModel):
 
 
 @app.get("/healthz")
+@app.get("/health")
 async def healthz() -> dict:
+    """Two paths on purpose.
+
+    /healthz is registered in the OpenAPI schema and reachable in tests, but
+    on Cloud Run it returns a Google-branded 404 while /openapi.json and
+    /session on the same host reach the container normally — so something in
+    front of the service intercepts that exact path. Cause unknown.
+
+    /health is the alias that actually answers. If it also 404s, the
+    interception is not path-specific and this comment is wrong.
+    """
     return {"status": "ok"}
 
 
