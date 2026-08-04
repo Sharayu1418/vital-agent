@@ -24,6 +24,19 @@ The thresholds are asymmetric on purpose. Recall is asserted hard, because
 a miss is the failure that matters. Precision is asserted loosely and
 reported in full, because a false fire costs one unnecessary caring
 message.
+
+Last recorded run — 3 Aug 2026, gemini-2.5-flash:
+
+    recall     100.0%  (45/45)
+    precision  100.0%  (0 false fires of 31)
+    83 calls in 122s  ->  ~1.5s per classification
+
+Read that with the right amount of scepticism. 76 hand-written cases is a
+smoke test, not evidence of 100% in the wild: the cases reflect one
+person's idea of how distress is phrased, the negatives skew toward
+obvious idiom, and real messages are longer, messier and more ambiguous.
+Treat it as "no known failures", and GROW the case file from production —
+every thumbs-down and every reported miss belongs in crisis_cases.py.
 """
 import os
 import pathlib
