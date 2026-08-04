@@ -176,6 +176,27 @@ def validate_startup() -> None:
             "Refusing to start: SameSite=None cookies MUST be Secure — "
             "browsers reject them otherwise, and plaintext cross-site "
             "cookies would be wrong anyway.")
+    if cfg.preview_origin_regex:
+        pattern = cfg.preview_origin_regex
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise RuntimeError(
+                f"Refusing to start: PREVIEW_ORIGIN_REGEX is not a valid "
+                f"regex ({exc}).") from exc
+        # Unanchored patterns are the classic CORS footgun: 'vercel\\.app'
+        # matches https://evil.com/?x=vercel.app. With allow_credentials=True
+        # that is a full account-takeover primitive, so refuse to boot.
+        if not (pattern.startswith("^") and pattern.endswith("$")):
+            raise RuntimeError(
+                "Refusing to start: PREVIEW_ORIGIN_REGEX must be anchored "
+                "with ^ and $ — an unanchored pattern matches far more "
+                "origins than intended, and these are credentialed requests.")
+        if ".*" in pattern or pattern in ("^.*$", "^.+$"):
+            raise RuntimeError(
+                "Refusing to start: PREVIEW_ORIGIN_REGEX contains '.*', "
+                "which is too broad for a credentialed CORS allowlist. "
+                "Match the specific preview subdomain shape instead.")
     if cfg.auth_required and not (cfg.firebase_auth_enabled or configured_token()):
         raise RuntimeError(
             "Refusing to start: AUTH_REQUIRED=true but no authenticator is "

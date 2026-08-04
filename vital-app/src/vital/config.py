@@ -65,10 +65,28 @@ class Settings(BaseSettings):
 
     # --- Phase 4: guardrails ---
     daily_token_budget: int = 50_000   # per user; ~$0.05/day at Flash prices
+    # Hard ceiling on the crisis screen's model call. Past this we stop
+    # waiting and fall back to deterministic matching — a distressed person
+    # must never sit on a spinner because Vertex is slow.
+    crisis_timeout_seconds: float = 4.0
     recursion_limit: int = 25          # hard cap on graph steps per turn
 
     # --- Phase 5: frontend origin for CORS (Vercel URL in prod) ---
     frontend_origin: str = "http://localhost:3000"
+    # Optional anchored regex for additional allowed origins — in practice
+    # Vercel preview deployments, which get a fresh subdomain per branch and
+    # are otherwise blocked by the single-origin allowlist above (P1-12).
+    #
+    # OPT-IN ON PURPOSE. It would be easy to derive this from
+    # frontend_origin ("vital-agent.vercel.app" -> "vital-agent-*.vercel.app")
+    # but that would be a security bug: *.vercel.app is a shared namespace,
+    # so anyone can register a project whose subdomain matches the wildcard.
+    # Combined with allow_credentials=True, that would hand a stranger's
+    # site the ability to make authenticated requests as your users. Write
+    # the pattern deliberately, anchored, and keep it as tight as possible.
+    #
+    #   PREVIEW_ORIGIN_REGEX=^https://vital-agent-git-[a-z0-9-]+-myteam\.vercel\.app$
+    preview_origin_regex: str | None = None
 
 
 @lru_cache

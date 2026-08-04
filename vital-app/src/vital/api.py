@@ -9,6 +9,7 @@ Identity model (interim until real auth in Phase 5) — see security.py:
 - Debug routes exist only with DEBUG_ENDPOINTS=true, which refuses to
   boot without a token, and always require that token.
 """
+import asyncio
 import xml.etree.ElementTree as ET
 import zipfile
 from contextlib import asynccontextmanager
@@ -58,6 +59,10 @@ from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings().frontend_origin],
+    # P1-12: a single allowed origin blocked every Vercel preview deployment,
+    # so branch previews looked completely broken. Opt-in and anchored — see
+    # the security note on preview_origin_regex in config.py.
+    allow_origin_regex=settings().preview_origin_regex,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["Authorization", "Content-Type", "X-Vital-Session"],
@@ -118,7 +123,18 @@ class ChatRequest(BaseModel):
 
 
 @app.get("/healthz")
+@app.get("/health")
 async def healthz() -> dict:
+    """Two paths on purpose.
+
+    /healthz is registered in the OpenAPI schema and reachable in tests, but
+    on Cloud Run it returns a Google-branded 404 while /openapi.json and
+    /session on the same host reach the container normally — so something in
+    front of the service intercepts that exact path. Cause unknown.
+
+    /health is the alias that actually answers. If it also 404s, the
+    interception is not path-specific and this comment is wrong.
+    """
     return {"status": "ok"}
 
 
@@ -177,6 +193,43 @@ def visible_text(content) -> str:
     return text if isinstance(text, str) else ""
 
 
+def config_for(user_id: str, thread_id: str) -> dict:
+    """The checkpointer key. Identity is part of it by construction, so a
+    caller can only ever address their own threads."""
+    return {"configurable": {"thread_id": f"{user_id}:{thread_id}"}}
+
+
+async def _screen_message(message: str, config) -> bool:
+    """Crisis screen as a task, for the concurrent path. Never raises — the
+    caller is a gate on user-visible output and must always get an answer."""
+    try:
+        history = await _recent_texts(config)
+        return await run_in_threadpool(guardrails.assess, message, history)
+    except Exception:
+        return await run_in_threadpool(guardrails.deterministic_crisis, message)
+
+
+async def _recent_texts(config, limit: int = 4) -> list[str]:
+    """Last few human/ai texts on this thread, for crisis-screen context.
+
+    'I don't want to be here anymore' is unreadable without the turns
+    around it. Best-effort: a fresh thread or an unavailable checkpointer
+    yields no context, and the screen still runs on the message alone.
+    """
+    try:
+        snap = await _aget_graph_state(config)
+    except Exception:
+        return []
+    values = getattr(snap, "values", None) or {}
+    out = []
+    for m in (values.get("messages") or [])[-limit:]:
+        if getattr(m, "type", "") in ("human", "ai"):
+            text = visible_text(getattr(m, "content", None))
+            if text:
+                out.append(f"{m.type}: {text}")
+    return out
+
+
 async def _aget_graph_state(config):
     """Read graph state from async endpoints. Async-checkpointer graphs
     (prod: AsyncPostgresSaver) require aget_state; sync/in-memory graphs
@@ -186,7 +239,7 @@ async def _aget_graph_state(config):
     return graph.get_state(config)
 
 
-def _graph_stream(graph_input, config, user_id: str):
+def _graph_stream(graph_input, config, user_id: str, screen=None):
     """Shared SSE generator for /chat and /approve. Returns the async
     generator OBJECT (callers hand it straight to EventSourceResponse).
 
@@ -194,6 +247,12 @@ def _graph_stream(graph_input, config, user_id: str):
     - approval_required: graph paused at request_approval (plan payload)
     - message: a final AI message that was written to state by a non-LLM
       node (commit/reject confirmations) and therefore never streamed
+
+    `screen` is an optional awaitable resolving True when the message is a
+    crisis. When present the graph runs CONCURRENTLY with it and every event
+    is withheld until the verdict lands — so the classifier's ~1.5s overlaps
+    the graph's own first-token latency instead of being added to it, and
+    the user still never sees agent output for a crisis message.
     """
     import json as _json
 
@@ -208,20 +267,34 @@ def _graph_stream(graph_input, config, user_id: str):
         real_tokens = 0
         remaining = await run_in_threadpool(guardrails.remaining_budget, user_id)
         over_budget = False
+        # output withheld until the crisis screen clears; discarded entirely
+        # if it does not
+        held: list[dict] = []
+        gated = screen is not None
+        crisis = False
+
+        async def is_crisis() -> bool:
+            try:
+                return bool(await screen)
+            except Exception:
+                return False   # the screen fails safe internally
+
         run_config = {**config, "recursion_limit": settings().recursion_limit}
         events = graph.astream_events(graph_input, config=run_config, version="v2")
         try:
             async for event in events:
                 kind = event["event"]
                 node = event.get("metadata", {}).get("langgraph_node", "")
+                out: list[dict] = []
                 if kind == "on_chat_model_stream" and node not in _NON_USER_FACING:
                     chunk = visible_text(event["data"]["chunk"].content)
                     if chunk:
                         streamed_tokens = True
                         streamed_chars += len(chunk)
-                        yield {"event": "token", "data": chunk}
+                        out.append({"event": "token", "data": chunk})
                 elif kind == "on_tool_start":
-                    yield {"event": "status", "data": f"{node}: using {event['name']}"}
+                    out.append({"event": "status",
+                                "data": f"{node}: using {event['name']}"})
                 elif kind == "on_chat_model_end":
                     real_tokens += guardrails.tokens_from_model_end(event)
                     if real_tokens >= remaining:
@@ -229,18 +302,63 @@ def _graph_stream(graph_input, config, user_id: str):
                         # append rather than replace: a `message` event would
                         # clobber whatever already streamed (stream.js)
                         if streamed_tokens:
-                            yield {"event": "token",
-                                   "data": "\n\n" + guardrails.OVER_BUDGET_MID_TURN}
+                            out.append({"event": "token",
+                                        "data": "\n\n" + guardrails.OVER_BUDGET_MID_TURN})
                         else:
-                            yield {"event": "message",
-                                   "data": guardrails.OVER_BUDGET_MID_TURN}
-                        break
+                            out.append({"event": "message",
+                                        "data": guardrails.OVER_BUDGET_MID_TURN})
+
+                if gated:
+                    # hold everything back until the verdict is in. Checking
+                    # done() rather than awaiting keeps the graph draining.
+                    if screen.done():
+                        if await is_crisis():
+                            crisis = True
+                            break
+                        gated = False
+                        out = held + out
+                        held = []
+                    else:
+                        held.extend(out)
+                        if over_budget:
+                            break
+                        continue
+
+                for ev in out:
+                    yield ev
+                if over_budget:
+                    break
         finally:
             # breaking out of `async for` doesn't close the generator; the
             # graph run must be torn down explicitly or it leaks a task
             aclose = getattr(events, "aclose", None)
             if aclose is not None:
                 await aclose()
+
+        # graph finished before the verdict: now we have to wait for it
+        if gated and not crisis:
+            if await is_crisis():
+                crisis = True
+            else:
+                gated = False
+                for ev in held:
+                    yield ev
+                held = []
+
+        if crisis:
+            # everything the agents produced is discarded unseen
+            billed = max(1, real_tokens)
+            try:
+                await run_in_threadpool(guardrails.record_usage, user_id, billed)
+            except Exception:
+                pass
+            metrics.log_turn(user_id, str(config["configurable"]["thread_id"]),
+                             routing_hops=0, est_tokens=billed,
+                             duration_ms=int((time.monotonic() - t0) * 1000),
+                             kind="crisis_response")
+            yield {"event": "message", "data": guardrails.CRISIS_RESPONSE}
+            yield {"event": "done", "data": ""}
+            return
 
         if over_budget:
             billed = max(1, real_tokens)
@@ -305,25 +423,52 @@ async def chat(req: ChatRequest, ident: Identity = Depends()) -> EventSourceResp
         await run_in_threadpool(storage.upsert_user_thread,
                                 user_id, req.thread_id, req.message)
 
-    # Guardrail 1: crisis messages bypass the agent pipeline entirely —
-    # deterministic path, no routing, no tools, no LLM dependency.
-    if guardrails.crisis_check(req.message):
-        async def crisis_stream():
-            yield {"event": "message", "data": guardrails.CRISIS_RESPONSE}
-            yield {"event": "done", "data": ""}
-        metrics.log_turn(user_id, req.thread_id, 0, 0, 0, kind="crisis_response")
-        response = EventSourceResponse(crisis_stream())
-        _set_session(response, new_session)
-        return response
+    config = config_for(user_id, req.thread_id)
+
+    # Guardrail 1: crisis screening (P0-4). Two routes into the same check,
+    # chosen by the cheap deterministic net:
+    #
+    # LOOKS CONCERNING -> screen FIRST, graph never starts. The original
+    #   principle holds exactly: a message that already reads as distress is
+    #   never routed, never hits a tool, never reaches the memory writer.
+    #   Costs ~1.5s, on the small slice of messages where that is warranted.
+    #
+    # LOOKS ORDINARY -> screen CONCURRENTLY with the graph, holding all
+    #   output until the verdict (see _graph_stream). The classifier still
+    #   runs on every message, so recall is unchanged, but its latency
+    #   overlaps the graph's instead of stacking on top — and the user still
+    #   never sees agent output for a crisis message.
+    #
+    # The tradeoff, stated plainly: on a crisis message that the broad net
+    # misses AND the classifier catches, the graph will have done some work
+    # before being abandoned — possibly a tool call or a memory write. Rare
+    # by construction (the net is tuned for recall), invisible to the user,
+    # and the price of not taxing every ordinary message 1.5s.
+    if guardrails.concern_signal(req.message):
+        if await run_in_threadpool(guardrails.assess, req.message,
+                                   await _recent_texts(config)):
+            async def crisis_stream():
+                yield {"event": "message", "data": guardrails.CRISIS_RESPONSE}
+                yield {"event": "done", "data": ""}
+            metrics.log_turn(user_id, req.thread_id, 0, 0, 0, kind="crisis_response")
+            response = EventSourceResponse(crisis_stream())
+            _set_session(response, new_session)
+            return response
+        screen = None
+    else:
+        screen = None  # created after the budget check, so it is never orphaned
 
     # Guardrail 2: per-user daily token budget
     if await run_in_threadpool(guardrails.budget_exceeded, user_id):
         raise HTTPException(status_code=429, detail=guardrails.BUDGET_MESSAGE)
 
-    config = {"configurable": {"thread_id": f"{user_id}:{req.thread_id}"}}
+    if not guardrails.concern_signal(req.message):
+        screen = asyncio.create_task(_screen_message(req.message, config))
+
     graph_input = {"messages": [("user", req.message)], "user_id": user_id,
                    "routing_history": []}  # reset loop guard each turn
-    response = EventSourceResponse(_graph_stream(graph_input, config, user_id))
+    response = EventSourceResponse(
+        _graph_stream(graph_input, config, user_id, screen=screen))
     _set_session(response, new_session)
     return response
 
@@ -344,11 +489,26 @@ async def approve(req: ApprovalRequest,
 
     user_id, new_session = ident.resolve(req.user_id)
     current_user_id.set(user_id)
+    config = config_for(user_id, req.thread_id)
+
+    # /approve carries up to 1000 characters of free-text feedback and was
+    # never screened (P0-4). Someone can just as easily say how they're
+    # really doing while editing a plan as while chatting.
+    if req.feedback.strip():
+        if await run_in_threadpool(guardrails.assess, req.feedback,
+                                   await _recent_texts(config)):
+            async def crisis_stream():
+                yield {"event": "message", "data": guardrails.CRISIS_RESPONSE}
+                yield {"event": "done", "data": ""}
+            metrics.log_turn(user_id, req.thread_id, 0, 0, 0, kind="crisis_response")
+            response = EventSourceResponse(crisis_stream())
+            _set_session(response, new_session)
+            return response
+
     # budget applies here too: an 'edit' resume re-invokes the planner LLM,
     # so /approve must not be a budget bypass (Phase 4 review finding)
     if await run_in_threadpool(guardrails.budget_exceeded, user_id):
         raise HTTPException(status_code=429, detail=guardrails.BUDGET_MESSAGE)
-    config = {"configurable": {"thread_id": f"{user_id}:{req.thread_id}"}}
     if not any(t.interrupts for t in getattr(await _aget_graph_state(config), "tasks", ())):
         raise HTTPException(status_code=409, detail="nothing awaiting approval on this thread")
     resume = ResumeCommand(resume={"action": req.action, "feedback": req.feedback})
@@ -432,6 +592,24 @@ async def upload_health(file: UploadFile, response: Response,
 
 # ---------- Side-panel data endpoints (Phase 5 UI) ----------
 
+@app.get("/session")
+def session_bootstrap(response: Response, ident: Identity = Depends()) -> dict:
+    """Establish identity in ONE request, before the client fans out (P1-9).
+
+    Every identity-resolving route can mint a new anonymous session. The web
+    app used to load sleep, calendar and memories with Promise.all, so three
+    concurrent requests could each mint a DIFFERENT session id; last cookie
+    written won, and anything stored under the losers was orphaned. Awaiting
+    this once first means the cookie exists before anything runs in parallel.
+
+    Returns nothing identifying — the session travels in the cookie (or the
+    X-Vital-Session header for the mobile client).
+    """
+    _, new_session = ident.resolve()
+    _set_session(response, new_session)
+    return {"ready": True}
+
+
 @app.get("/sleep/recent")
 def sleep_recent(response: Response, ident: Identity = Depends()) -> dict:
     """Last 14 nights, merging manual logs with uploaded data (upload wins
@@ -500,7 +678,7 @@ async def thread_messages(thread_id: str, response: Response,
         raise HTTPException(status_code=422, detail="invalid thread id")
     user_id, new_session = ident.resolve()
     _set_session(response, new_session)
-    snap = await _aget_graph_state({"configurable": {"thread_id": f"{user_id}:{thread_id}"}})
+    snap = await _aget_graph_state(config_for(user_id, thread_id))
     values = getattr(snap, "values", None) or {}
     out = []
     for m in values.get("messages", []):
@@ -699,7 +877,7 @@ if settings().debug_endpoints:  # route does not exist unless explicitly enabled
         validate_startup() guarantees a token exists; require it unconditionally."""
         if not trusted:
             raise HTTPException(status_code=401, detail="token required")
-        snap = await _aget_graph_state({"configurable": {"thread_id": f"{user_id}:{thread_id}"}})
+        snap = await _aget_graph_state(config_for(user_id, thread_id))
         return {
             "routing_history": snap.values.get("routing_history", []),
             "message_count": len(snap.values.get("messages", [])),

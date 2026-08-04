@@ -43,3 +43,10 @@ testpaths = ["tests"]
 # failed 23 tests the other. Pin it here instead of depending on how pytest
 # happens to be launched.
 pythonpath = ["."]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "respx>=0.23.1",
+]

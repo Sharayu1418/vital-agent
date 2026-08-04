@@ -9,7 +9,9 @@ import Chat from "./components/Chat";
 import { MenuIcon, PanelRightIcon, SpeakerIcon, UploadIcon } from "./components/icons";
 import Sidebar from "./components/Sidebar";
 import SidePanel from "./components/SidePanel";
-import { api, setTokenProvider, setUnauthorizedHandler } from "./lib/api";
+import {
+  api, bootstrapSession, resetSession, setTokenProvider, setUnauthorizedHandler,
+} from "./lib/api";
 import {
   anonAllowed, clearSessionTransport, consumeRedirectResult, gateFor, idToken,
   signInWithGoogle, signOutUser, watchAuth,
@@ -171,7 +173,13 @@ export default function Home() {
     if (gate !== "app") return undefined;
     const live = guardRef.current.begin();  // new identity epoch
     setAuthError(null);   // reached the app → no reauth prompt should linger
+    resetSession();       // this account bootstraps its own session
     (async () => {
+      // P1-9: one awaited identity call before ANY parallel work. Below,
+      // refreshPanel() and loadHistory() are deliberately not awaited and
+      // run concurrently — without this they would race to mint sessions.
+      await bootstrapSession().catch(() => {});
+      if (!live()) return;
       let list = loadThreads(localStorage);
       if (authUser) {
         try {
@@ -214,6 +222,7 @@ export default function Home() {
     // network round-trip — and every in-flight load started under this
     // account is invalidated so it can't write state afterwards.
     guardRef.current.invalidate();
+    resetSession();   // next identity must bootstrap its own session
     clearSessionTransport(localStorage);
     localStorage.removeItem("vital_threads");  // anon reload starts clean
     abortStream();          // an account's stream must not outlive sign-out
@@ -266,18 +275,34 @@ export default function Home() {
   const refreshPanel = useCallback(async () => {
     const live = guardRef.current.watch();  // stale after sign-out/switch
     try {
-      const [s, c, m] = await Promise.all([
+      // P1-9: settle identity BEFORE fanning out, or three parallel calls
+      // can each mint a different anonymous session
+      await bootstrapSession().catch(() => {});
+
+      // P1-10: allSettled, not all. With Promise.all a single failing
+      // endpoint rejected the whole batch and the catch below silently
+      // blanked the entire panel — sleep, calendar and memories together.
+      // Each section should survive its neighbours failing.
+      const [s, c, m] = await Promise.allSettled([
         api.sleepRecent(), api.calendar(), api.memories(),
       ]);
+      const ok = (r) => (r.status === "fulfilled" && r.value.ok ? r.value : null);
+      const read = async (r, pick) => {
+        const res = ok(r);
+        if (!res) return null;
+        try {
+          return pick(await res.json());
+        } catch { return null; }   // malformed body: drop that section only
+      };
       // parse everything FIRST — body parsing is itself async, so the
       // liveness check must come immediately before the state writes
-      const sleepBody = s.ok ? await s.json() : null;
-      const eventsBody = c.ok ? (await c.json()).events : null;
-      const memoriesBody = m.ok ? (await m.json()).memories : null;
+      const sleepBody = await read(s, (b) => b);
+      const eventsBody = await read(c, (b) => b.events);
+      const memoriesBody = await read(m, (b) => b.memories);
       if (!live()) return;
       // a working authenticated request proves we're not stuck — retire any
       // lingering "sign in again" notice (keeps the reauth prompt non-sticky)
-      if (s.ok || c.ok || m.ok) setAuthError(null);
+      if (ok(s) || ok(c) || ok(m)) setAuthError(null);
       if (sleepBody) setSleep(sleepBody);
       if (eventsBody) setEvents(eventsBody);
       if (memoriesBody) setMemories(memoriesBody);
