@@ -158,9 +158,15 @@ Answer "clear" for everything else, including:
 
 Judge the user's meaning, not the presence of any particular word. Messages
 may be in any language, may be misspelled, and may use slang ("kms",
-"unalive"). If the user's own safety is genuinely uncertain, answer "crisis".
+"unalive"). If the user's own safety is genuinely uncertain, answer "crisis"."""
 
-Recent conversation (for context; judge the LAST user message):
+# The conversation goes in a USER turn, not appended to the system prompt.
+# Gemini rejects a request whose only content is a system instruction with
+# "400 ... at least one contents field is required" — and because assess()
+# is built to swallow model failures, that 400 silently degraded every
+# single call to the keyword fallback instead of surfacing.
+CONTEXT_TEMPLATE = """Recent conversation (for context; judge the LAST user \
+message):
 {context}"""
 
 
@@ -169,23 +175,49 @@ class RiskVerdict(BaseModel):
     risk: Literal["crisis", "clear"]
 
 
+def classifier_messages(context: str) -> list:
+    """The exact message list sent to the model.
+
+    Split out as a pure function so the SHAPE is testable offline. That is
+    not fussiness: packing everything into a lone SystemMessage is what
+    broke this feature entirely, and because assess() swallows model errors
+    by design, nothing surfaced. A unit test on this function catches it
+    without credentials.
+    """
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    return [
+        SystemMessage(content=CLASSIFIER_PROMPT),
+        # MUST be a user turn. Gemini rejects a request whose only content
+        # is a system instruction: "400 ... at least one contents field is
+        # required".
+        HumanMessage(content=CONTEXT_TEMPLATE.format(context=context)),
+    ]
+
+
+def classifier_llm_kwargs() -> dict:
+    """Model settings for the crisis screen, as data so they can be asserted.
+
+    max_retries=1: the caller abandons this after crisis_timeout_seconds
+    (4s by default), so LangChain's default ladder — six attempts with
+    ten-second backoffs — can only burn quota against a deadline that has
+    already passed, and turns a misconfigured project into minutes of retry
+    spam instead of one readable error.
+    """
+    cfg = settings()
+    return {"model": cfg.vital_model, "temperature": 0.0,
+            "project": cfg.google_cloud_project,
+            "location": cfg.google_cloud_location,
+            "max_retries": 1}
+
+
 def _default_classifier(context: str) -> str:
     """Real classifier. Lazy import so tests and local dev stay offline."""
-    from langchain_core.messages import SystemMessage
     from langchain_google_vertexai import ChatVertexAI
 
-    cfg = settings()
-    # max_retries=1: the caller abandons this after crisis_timeout_seconds
-    # (4s by default), so LangChain's default retry ladder — six attempts
-    # with ten-second backoffs — can only ever burn quota against a deadline
-    # that has already passed. It also turns a misconfigured project into
-    # minutes of retry spam instead of an immediate, readable error.
-    llm = ChatVertexAI(model=cfg.vital_model, temperature=0.0,
-                       project=cfg.google_cloud_project,
-                       location=cfg.google_cloud_location,
-                       max_retries=1)
+    llm = ChatVertexAI(**classifier_llm_kwargs())
     verdict = llm.with_structured_output(RiskVerdict).invoke(
-        [SystemMessage(content=CLASSIFIER_PROMPT.format(context=context))])
+        classifier_messages(context))
     return verdict.risk
 
 

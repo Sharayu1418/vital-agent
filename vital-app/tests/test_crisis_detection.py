@@ -208,3 +208,36 @@ def test_ordinary_approve_feedback_is_untouched(monkeypatch):
     r = client.post("/approve", json={"action": "edit",
                                       "feedback": "move the run to Sunday morning"})
     assert "988" not in r.text
+
+
+# ---------- message shape sent to the provider ----------
+
+def test_classifier_sends_a_user_turn_not_only_a_system_prompt():
+    """Regression guard for a bug that disabled the whole feature silently.
+
+    The classifier originally packed everything into a single SystemMessage.
+    Gemini rejects a request whose only content is a system instruction —
+    "400 ... at least one contents field is required" — and because assess()
+    is deliberately built to swallow model failures, every call fell back to
+    keyword matching. The feature looked wired up and had never once run.
+
+    Nothing offline caught it, because the fallback answers plausibly. So
+    pin the message shape here, where no credentials are needed.
+    """
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    messages = guardrails.classifier_messages(
+        guardrails.build_context("hello there"))
+
+    assert any(isinstance(m, HumanMessage) for m in messages), (
+        "no user turn — Gemini rejects this with 'at least one contents "
+        "field is required', and assess() then silently falls back to keywords")
+    assert any(isinstance(m, SystemMessage) for m in messages)
+    human = next(m for m in messages if isinstance(m, HumanMessage))
+    assert "hello there" in human.content, "the message under judgement must reach the model"
+
+
+def test_classifier_does_not_retry_past_its_own_deadline():
+    """The caller abandons the call after crisis_timeout_seconds, so a long
+    retry ladder can only burn quota against an expired deadline."""
+    assert guardrails.classifier_llm_kwargs()["max_retries"] <= 2
