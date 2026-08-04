@@ -15,3 +15,7 @@ data/
 .DS_Store
 
 docs/vital-review-teachings.md
+
+# live-eval output: a run artefact, not a source file
+crisis-live-eval.txt
+Dockerfile.backup
