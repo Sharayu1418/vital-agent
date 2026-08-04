@@ -32,7 +32,14 @@ def offline_crisis_classifier(monkeypatch):
     'clear': that way every existing crisis test still exercises real
     detection logic, and a test that needs specific classifier behaviour
     passes its own `classifier=` instead.
+
+    Skipped under CRISIS_LIVE_EVAL=1, which exists precisely to exercise the
+    real model. Reloading the module to undo this patch was too fragile —
+    other modules keep a reference to the old one.
     """
+    if os.environ.get("CRISIS_LIVE_EVAL") == "1":
+        return
+
     from vital import guardrails
 
     def offline(context: str) -> str:

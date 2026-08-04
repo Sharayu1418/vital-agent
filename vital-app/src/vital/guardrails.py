@@ -175,9 +175,15 @@ def _default_classifier(context: str) -> str:
     from langchain_google_vertexai import ChatVertexAI
 
     cfg = settings()
+    # max_retries=1: the caller abandons this after crisis_timeout_seconds
+    # (4s by default), so LangChain's default retry ladder — six attempts
+    # with ten-second backoffs — can only ever burn quota against a deadline
+    # that has already passed. It also turns a misconfigured project into
+    # minutes of retry spam instead of an immediate, readable error.
     llm = ChatVertexAI(model=cfg.vital_model, temperature=0.0,
                        project=cfg.google_cloud_project,
-                       location=cfg.google_cloud_location)
+                       location=cfg.google_cloud_location,
+                       max_retries=1)
     verdict = llm.with_structured_output(RiskVerdict).invoke(
         [SystemMessage(content=CLASSIFIER_PROMPT.format(context=context))])
     return verdict.risk
