@@ -241,3 +241,127 @@ def test_classifier_does_not_retry_past_its_own_deadline():
     """The caller abandons the call after crisis_timeout_seconds, so a long
     retry ladder can only burn quota against an expired deadline."""
     assert guardrails.classifier_llm_kwargs()["max_retries"] <= 2
+
+
+# ---------- concurrent screening (latency fix) ----------
+
+def slow_classifier(verdict, delay=0.3):
+    """A classifier that resolves AFTER the graph has produced output.
+
+    Essential, not decorative: with an instant fake the screen task is
+    already done by the first graph event, the buffering branch never runs,
+    and these tests pass without exercising the thing they claim to test.
+    (Verified by mutation — removing the buffering did not fail them until
+    this delay was added.)
+    """
+    import time
+
+    def classify(_context):
+        time.sleep(delay)
+        return verdict
+
+    return classify
+
+
+class TokenGraph:
+    """Streams agent tokens, so we can prove they never leak on a crisis."""
+
+    def __init__(self, chunks=("Here are ", "some ideas")):
+        self.calls = 0
+        self.chunks = chunks
+
+    async def astream_events(self, _inputs, config=None, version=None):
+        from types import SimpleNamespace
+        self.calls += 1
+        for chunk in self.chunks:
+            yield {"event": "on_chat_model_stream",
+                   "metadata": {"langgraph_node": "activity_scout"},
+                   "data": {"chunk": SimpleNamespace(content=chunk)}}
+
+    def get_state(self, _config):
+        from types import SimpleNamespace
+        return SimpleNamespace(tasks=(), values={"messages": [],
+                                                 "routing_history": ["activity_scout"]})
+
+
+def test_concerning_message_never_starts_the_graph(monkeypatch):
+    """The original guarantee, preserved for messages that already look like
+    distress: no routing, no tools, no memory writer."""
+    from vital import guardrails as g
+    monkeypatch.setattr(g, "_default_classifier", lambda _c: "crisis")
+    fake = TokenGraph()
+    client = _client(monkeypatch, fake)
+
+    message = "I want to kill myself"
+    assert g.concern_signal(message)          # trips the cheap net -> serial
+    r = client.post("/chat", json={"message": message})
+    assert "988" in r.text
+    assert fake.calls == 0, "graph must not run for an obviously concerning message"
+
+
+def test_ordinary_message_runs_the_graph_concurrently(monkeypatch):
+    """No serial screen for ordinary traffic — that was the 1.5s tax."""
+    from vital import guardrails as g
+    monkeypatch.setattr(g, "_default_classifier", slow_classifier("clear"))
+    fake = TokenGraph()
+    client = _client(monkeypatch, fake)
+
+    message = "bored, what should I do this weekend"
+    assert not g.concern_signal(message)
+    r = client.post("/chat", json={"message": message})
+    assert fake.calls == 1
+    assert "Here are " in r.text and "some ideas" in r.text
+
+
+def test_agent_output_is_never_shown_when_the_screen_says_crisis(monkeypatch):
+    """THE safety property of the concurrent path.
+
+    A paraphrased crisis the keyword net misses: the graph starts, produces
+    tokens, and the classifier then says crisis. The user must see the crisis
+    response and NONE of the agent's output.
+    """
+    from vital import guardrails as g
+    monkeypatch.setattr(g, "_default_classifier", slow_classifier("crisis"))
+    fake = TokenGraph(chunks=("How about ", "a hike this weekend"))
+    client = _client(monkeypatch, fake)
+
+    message = "there's no version of this where it gets better"
+    assert not g.deterministic_crisis(message)   # net misses it, so: concurrent
+    r = client.post("/chat", json={"message": message})
+
+    assert "988" in r.text
+    assert fake.calls == 1, "graph did start — that is the point of the concurrency"
+    assert "How about" not in r.text, "agent output leaked on a crisis message"
+    assert "hike" not in r.text
+
+
+def test_buffered_tokens_are_flushed_in_order_once_cleared(monkeypatch):
+    from vital import guardrails as g
+    monkeypatch.setattr(g, "_default_classifier", slow_classifier("clear"))
+    fake = TokenGraph(chunks=("one ", "two ", "three"))
+    client = _client(monkeypatch, fake)
+
+    r = client.post("/chat", json={"message": "plan something fun"})
+    body = r.text
+    assert body.index("one") < body.index("two") < body.index("three")
+
+
+def test_screen_failure_on_the_concurrent_path_falls_back_safely(monkeypatch):
+    """If the screen errors, _screen_message falls back to deterministic
+    matching rather than defaulting to 'clear'."""
+    from vital import guardrails as g
+
+    def broken(_context):
+        raise RuntimeError("vertex down")
+
+    monkeypatch.setattr(g, "_default_classifier", broken)
+    fake = TokenGraph(chunks=("suggestion text",))
+    client = _client(monkeypatch, fake)
+
+    # phrasing the broad net DOES catch, so the fallback should fire
+    message = "honestly I just want it all to stop"
+    assert not g.crisis_check(message)          # strict list misses it
+    assert g.deterministic_crisis(message)      # broad net catches it
+    r = client.post("/chat", json={"message": message})
+    assert "988" in r.text
+    assert "suggestion text" not in r.text

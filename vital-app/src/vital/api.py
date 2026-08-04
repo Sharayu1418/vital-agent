@@ -9,6 +9,7 @@ Identity model (interim until real auth in Phase 5) — see security.py:
 - Debug routes exist only with DEBUG_ENDPOINTS=true, which refuses to
   boot without a token, and always require that token.
 """
+import asyncio
 import xml.etree.ElementTree as ET
 import zipfile
 from contextlib import asynccontextmanager
@@ -198,6 +199,16 @@ def config_for(user_id: str, thread_id: str) -> dict:
     return {"configurable": {"thread_id": f"{user_id}:{thread_id}"}}
 
 
+async def _screen_message(message: str, config) -> bool:
+    """Crisis screen as a task, for the concurrent path. Never raises — the
+    caller is a gate on user-visible output and must always get an answer."""
+    try:
+        history = await _recent_texts(config)
+        return await run_in_threadpool(guardrails.assess, message, history)
+    except Exception:
+        return await run_in_threadpool(guardrails.deterministic_crisis, message)
+
+
 async def _recent_texts(config, limit: int = 4) -> list[str]:
     """Last few human/ai texts on this thread, for crisis-screen context.
 
@@ -228,7 +239,7 @@ async def _aget_graph_state(config):
     return graph.get_state(config)
 
 
-def _graph_stream(graph_input, config, user_id: str):
+def _graph_stream(graph_input, config, user_id: str, screen=None):
     """Shared SSE generator for /chat and /approve. Returns the async
     generator OBJECT (callers hand it straight to EventSourceResponse).
 
@@ -236,6 +247,12 @@ def _graph_stream(graph_input, config, user_id: str):
     - approval_required: graph paused at request_approval (plan payload)
     - message: a final AI message that was written to state by a non-LLM
       node (commit/reject confirmations) and therefore never streamed
+
+    `screen` is an optional awaitable resolving True when the message is a
+    crisis. When present the graph runs CONCURRENTLY with it and every event
+    is withheld until the verdict lands — so the classifier's ~1.5s overlaps
+    the graph's own first-token latency instead of being added to it, and
+    the user still never sees agent output for a crisis message.
     """
     import json as _json
 
@@ -250,20 +267,34 @@ def _graph_stream(graph_input, config, user_id: str):
         real_tokens = 0
         remaining = await run_in_threadpool(guardrails.remaining_budget, user_id)
         over_budget = False
+        # output withheld until the crisis screen clears; discarded entirely
+        # if it does not
+        held: list[dict] = []
+        gated = screen is not None
+        crisis = False
+
+        async def is_crisis() -> bool:
+            try:
+                return bool(await screen)
+            except Exception:
+                return False   # the screen fails safe internally
+
         run_config = {**config, "recursion_limit": settings().recursion_limit}
         events = graph.astream_events(graph_input, config=run_config, version="v2")
         try:
             async for event in events:
                 kind = event["event"]
                 node = event.get("metadata", {}).get("langgraph_node", "")
+                out: list[dict] = []
                 if kind == "on_chat_model_stream" and node not in _NON_USER_FACING:
                     chunk = visible_text(event["data"]["chunk"].content)
                     if chunk:
                         streamed_tokens = True
                         streamed_chars += len(chunk)
-                        yield {"event": "token", "data": chunk}
+                        out.append({"event": "token", "data": chunk})
                 elif kind == "on_tool_start":
-                    yield {"event": "status", "data": f"{node}: using {event['name']}"}
+                    out.append({"event": "status",
+                                "data": f"{node}: using {event['name']}"})
                 elif kind == "on_chat_model_end":
                     real_tokens += guardrails.tokens_from_model_end(event)
                     if real_tokens >= remaining:
@@ -271,18 +302,63 @@ def _graph_stream(graph_input, config, user_id: str):
                         # append rather than replace: a `message` event would
                         # clobber whatever already streamed (stream.js)
                         if streamed_tokens:
-                            yield {"event": "token",
-                                   "data": "\n\n" + guardrails.OVER_BUDGET_MID_TURN}
+                            out.append({"event": "token",
+                                        "data": "\n\n" + guardrails.OVER_BUDGET_MID_TURN})
                         else:
-                            yield {"event": "message",
-                                   "data": guardrails.OVER_BUDGET_MID_TURN}
-                        break
+                            out.append({"event": "message",
+                                        "data": guardrails.OVER_BUDGET_MID_TURN})
+
+                if gated:
+                    # hold everything back until the verdict is in. Checking
+                    # done() rather than awaiting keeps the graph draining.
+                    if screen.done():
+                        if await is_crisis():
+                            crisis = True
+                            break
+                        gated = False
+                        out = held + out
+                        held = []
+                    else:
+                        held.extend(out)
+                        if over_budget:
+                            break
+                        continue
+
+                for ev in out:
+                    yield ev
+                if over_budget:
+                    break
         finally:
             # breaking out of `async for` doesn't close the generator; the
             # graph run must be torn down explicitly or it leaks a task
             aclose = getattr(events, "aclose", None)
             if aclose is not None:
                 await aclose()
+
+        # graph finished before the verdict: now we have to wait for it
+        if gated and not crisis:
+            if await is_crisis():
+                crisis = True
+            else:
+                gated = False
+                for ev in held:
+                    yield ev
+                held = []
+
+        if crisis:
+            # everything the agents produced is discarded unseen
+            billed = max(1, real_tokens)
+            try:
+                await run_in_threadpool(guardrails.record_usage, user_id, billed)
+            except Exception:
+                pass
+            metrics.log_turn(user_id, str(config["configurable"]["thread_id"]),
+                             routing_hops=0, est_tokens=billed,
+                             duration_ms=int((time.monotonic() - t0) * 1000),
+                             kind="crisis_response")
+            yield {"event": "message", "data": guardrails.CRISIS_RESPONSE}
+            yield {"event": "done", "data": ""}
+            return
 
         if over_budget:
             billed = max(1, real_tokens)
@@ -347,29 +423,52 @@ async def chat(req: ChatRequest, ident: Identity = Depends()) -> EventSourceResp
         await run_in_threadpool(storage.upsert_user_thread,
                                 user_id, req.thread_id, req.message)
 
-    # Guardrail 1: crisis messages bypass the agent pipeline entirely — no
-    # routing, no tools. The screen itself is a small model call (P0-4:
-    # keywords caught 13% of real phrasings), run off the event loop and
-    # with the deterministic list as its fallback, so a model outage
-    # degrades this path rather than disabling it.
-    if await run_in_threadpool(guardrails.assess, req.message,
-                               await _recent_texts(config_for(user_id, req.thread_id))):
-        async def crisis_stream():
-            yield {"event": "message", "data": guardrails.CRISIS_RESPONSE}
-            yield {"event": "done", "data": ""}
-        metrics.log_turn(user_id, req.thread_id, 0, 0, 0, kind="crisis_response")
-        response = EventSourceResponse(crisis_stream())
-        _set_session(response, new_session)
-        return response
+    config = config_for(user_id, req.thread_id)
+
+    # Guardrail 1: crisis screening (P0-4). Two routes into the same check,
+    # chosen by the cheap deterministic net:
+    #
+    # LOOKS CONCERNING -> screen FIRST, graph never starts. The original
+    #   principle holds exactly: a message that already reads as distress is
+    #   never routed, never hits a tool, never reaches the memory writer.
+    #   Costs ~1.5s, on the small slice of messages where that is warranted.
+    #
+    # LOOKS ORDINARY -> screen CONCURRENTLY with the graph, holding all
+    #   output until the verdict (see _graph_stream). The classifier still
+    #   runs on every message, so recall is unchanged, but its latency
+    #   overlaps the graph's instead of stacking on top — and the user still
+    #   never sees agent output for a crisis message.
+    #
+    # The tradeoff, stated plainly: on a crisis message that the broad net
+    # misses AND the classifier catches, the graph will have done some work
+    # before being abandoned — possibly a tool call or a memory write. Rare
+    # by construction (the net is tuned for recall), invisible to the user,
+    # and the price of not taxing every ordinary message 1.5s.
+    if guardrails.concern_signal(req.message):
+        if await run_in_threadpool(guardrails.assess, req.message,
+                                   await _recent_texts(config)):
+            async def crisis_stream():
+                yield {"event": "message", "data": guardrails.CRISIS_RESPONSE}
+                yield {"event": "done", "data": ""}
+            metrics.log_turn(user_id, req.thread_id, 0, 0, 0, kind="crisis_response")
+            response = EventSourceResponse(crisis_stream())
+            _set_session(response, new_session)
+            return response
+        screen = None
+    else:
+        screen = None  # created after the budget check, so it is never orphaned
 
     # Guardrail 2: per-user daily token budget
     if await run_in_threadpool(guardrails.budget_exceeded, user_id):
         raise HTTPException(status_code=429, detail=guardrails.BUDGET_MESSAGE)
 
-    config = config_for(user_id, req.thread_id)
+    if not guardrails.concern_signal(req.message):
+        screen = asyncio.create_task(_screen_message(req.message, config))
+
     graph_input = {"messages": [("user", req.message)], "user_id": user_id,
                    "routing_history": []}  # reset loop guard each turn
-    response = EventSourceResponse(_graph_stream(graph_input, config, user_id))
+    response = EventSourceResponse(
+        _graph_stream(graph_input, config, user_id, screen=screen))
     _set_session(response, new_session)
     return response
 
