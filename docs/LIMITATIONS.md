@@ -114,6 +114,15 @@ distinction the data doesn't support.
   high leaves duplicates, too low silently eats distinct memories.
 - Every memory write and recall now costs an embedding call. Small, but on
   the hot path.
+- Memories written *before* semantic memory shipped have no vector, so the
+  store's similarity search cannot see them: they still list in the "What
+  VITAL knows" panel but are unreachable by recall, and new facts will not
+  dedupe against them. `scripts/backfill_memory_vectors.py` re-embeds and
+  merges them. On this deployment the nine pre-existing rows were simply
+  deleted from the UI instead and allowed to re-accumulate — cheaper than
+  arranging production database access for nine rows, four of which were the
+  same Albany fact. With real users, run the backfill; dropping their
+  memories is not an option.
 - Health uploads stream and are memory-safe, but Cloud Run caps HTTP/1.1
   request bodies at 32MB. Larger Apple Health exports need a signed-URL
   upload to GCS; `--use-http2` is **not** a workaround, because uvicorn
