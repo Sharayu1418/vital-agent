@@ -2,20 +2,26 @@
 
 Topology (D11: security lives here, not in prompts):
 
-    START → supervisor ⇄ {activity_scout | sleep_energy | idea_generator}
-                              each agent → memory_writer → supervisor → END
+    START → supervisor → {activity_scout | sleep_energy | idea_generator
+                          | people_connector} → END
+
+One supervisor call, one specialist, done. Agents no longer return to the
+supervisor: it could not tell that an agent had already answered, so it
+re-routed on the same user message until the hop guard fired — 5x the
+latency and tokens on every turn.
 
 Memory flow: agent nodes get relevant facts injected as a system message;
-after each agent turn the writer extracts new stable facts (Flash — it's
-an extraction task, D5).
+extraction now happens in the API AFTER the response is sent (see
+write_memories), not as a node between the answer and `done`.
 """
 import atexit
 from contextlib import AsyncExitStack, ExitStack
+from functools import lru_cache
 
 from langchain_core.messages import SystemMessage
 from langchain_google_vertexai import ChatVertexAI
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.graph import START, StateGraph
+from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
 from vital import memory
@@ -37,7 +43,15 @@ async def close_graph_resources():
 
 
 def _agent_node(agent, store):
-    """Wrap a compiled ReAct agent as a node, with memory injection."""
+    """Wrap a compiled ReAct agent as a node, with memory injection.
+
+    Goes straight to END. It used to return to the supervisor via the memory
+    writer, on the theory that the supervisor might chain a second
+    specialist. In production that theory cost 5x: the supervisor could not
+    tell an agent had already answered, so it re-routed until the hop guard
+    fired. One specialist per message is also what reads well — chained
+    agents concatenated into a single bubble with no separator.
+    """
     def node(state: VitalState) -> Command:
         messages = list(state["messages"])
         last_user = next((m.content for m in reversed(messages)
@@ -47,22 +61,41 @@ def _agent_node(agent, store):
             messages = [SystemMessage(content="Known about this user (use it, "
                                       "don't re-ask): " + "; ".join(facts))] + messages
         result = agent.invoke({"messages": messages})
-        return Command(goto="memory_writer",
-                       update={"messages": [result["messages"][-1]]})
+        return Command(goto=END, update={"messages": [result["messages"][-1]]})
     return node
 
 
-def _memory_writer(store, llm):
-    def node(state: VitalState) -> Command:
-        # last human + AI exchange is enough context for fact extraction
-        tail = state["messages"][-4:]
-        transcript = "\n".join(f"{m.type}: {m.content}" for m in tail)
-        try:
-            memory.remember(store, state["user_id"], transcript, llm)
-        except Exception:
-            pass  # memory must never break the conversation; log in Phase 4
-        return Command(goto="supervisor")
-    return node
+@lru_cache
+def _extractor_llm():
+    cfg = settings()
+    return ChatVertexAI(model=cfg.vital_model, temperature=0.0,
+                        project=cfg.google_cloud_project,
+                        location=cfg.google_cloud_location)
+
+
+def write_memories(user_id: str, messages, store=None, llm=None) -> int:
+    """Extract durable facts from the tail of a conversation.
+
+    Deliberately NOT a graph node any more. As a node it sat between the
+    answer and the `done` event, so the composer stayed locked while a model
+    call ran that contributes nothing the user can see. The API now calls
+    this AFTER emitting `done` but still inside the request, so the user is
+    unblocked immediately and Cloud Run keeps the CPU allocated.
+
+    Best-effort by design: memory must never break a conversation. If the
+    client disconnects the moment it gets `done`, this may not run at all,
+    and that is an acceptable trade for an unblocked composer.
+    """
+    tail = list(messages)[-4:]
+    if not tail:
+        return 0
+    transcript = "\n".join(
+        f"{getattr(m, 'type', 'msg')}: {getattr(m, 'content', '')}" for m in tail)
+    try:
+        return memory.remember(store or memory.get_store(), user_id,
+                               transcript, llm or _extractor_llm())
+    except Exception:
+        return 0
 
 
 def build_graph(checkpointer=None, store=None):
@@ -78,7 +111,6 @@ def build_graph(checkpointer=None, store=None):
     builder.add_node("sleep_energy", _agent_node(sleep_energy.build_agent(), store))
     builder.add_node("idea_generator", _agent_node(idea_generator.build_agent(), store))
     builder.add_node("people_connector", _agent_node(people_connector.build_agent(), store))
-    builder.add_node("memory_writer", _memory_writer(store, flash))
     # Phase 3 HITL chain. Topology = security (D11): commit_plan is reachable
     # ONLY via request_approval's resume — no other edge leads to it.
     builder.add_node("planner", make_planner(flash))  # Pro only if evals demand it (D5)
@@ -104,7 +136,6 @@ async def build_graph_async(checkpointer=None, store=None):
     builder.add_node("sleep_energy", _agent_node(sleep_energy.build_agent(), store))
     builder.add_node("idea_generator", _agent_node(idea_generator.build_agent(), store))
     builder.add_node("people_connector", _agent_node(people_connector.build_agent(), store))
-    builder.add_node("memory_writer", _memory_writer(store, flash))
     builder.add_node("planner", make_planner(flash))
     builder.add_node("request_approval", make_request_approval())
     builder.add_node("commit_plan", make_commit_plan(LocalCalendar()))

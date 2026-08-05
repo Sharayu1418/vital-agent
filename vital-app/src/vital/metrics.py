@@ -27,7 +27,8 @@ def _hash(user_id: str) -> str:
 
 def log_turn(user_id: str, thread_id: str, routing_hops: int,
              est_tokens: int, duration_ms: int, kind: str = "chat_turn",
-             heuristic_tokens: int | None = None) -> None:
+             heuristic_tokens: int | None = None,
+             routes: list[str] | None = None) -> None:
     """est_tokens is the BILLED figure — real provider usage summed across
     every model call in the turn, falling back to the chars/4 heuristic when
     no usage metadata is available.
@@ -48,4 +49,9 @@ def log_turn(user_id: str, thread_id: str, routing_hops: int,
     if heuristic_tokens is not None:
         payload["heuristic_tokens"] = heuristic_tokens
         payload["undercount_ratio"] = round(est_tokens / max(1, heuristic_tokens), 2)
+    if routes is not None:
+        # WHICH agents ran, not just how many hops. A count of 5 hid the fact
+        # that it was the same specialist re-invoked on the same message;
+        # ["sleep_energy", "sleep_energy", ...] would have said so immediately.
+        payload["routes"] = routes
     logger.info(json.dumps(payload))

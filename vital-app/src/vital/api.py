@@ -22,7 +22,8 @@ from starlette.concurrency import run_in_threadpool
 
 from vital import buddies, guardrails, ingest, memory, metrics, storage
 from vital.config import settings
-from vital.graph import build_graph_async, close_graph_resources
+from vital.graph import (build_graph_async, close_graph_resources,
+                         write_memories)
 from vital.security import (SESSION_COOKIE, AuthContext, authenticate,
                             caller_is_trusted, resolve_identity,
                             validate_startup)
@@ -403,13 +404,26 @@ def _graph_stream(graph_input, config, user_id: str, screen=None):
             await run_in_threadpool(guardrails.record_usage, user_id, billed)
         except Exception:
             pass  # accounting must never break the stream
+        routes = list(values.get("routing_history", []) or [])
         metrics.log_turn(user_id, str(config["configurable"]["thread_id"]),
-                         routing_hops=len(values.get("routing_history", []) or []),
+                         routing_hops=len(routes),
                          est_tokens=billed,
                          duration_ms=int((time.monotonic() - t0) * 1000),
-                         heuristic_tokens=heuristic)
+                         heuristic_tokens=heuristic,
+                         routes=routes)
 
         yield {"event": "done", "data": ""}
+
+        # Memory extraction runs AFTER `done`: the composer unlocks the moment
+        # the answer is complete, and this model call no longer sits between
+        # the answer and the user's next message. Still inside the request, so
+        # Cloud Run keeps the CPU allocated (a detached background task would
+        # be throttled or killed once the response finished).
+        try:
+            await run_in_threadpool(write_memories, user_id,
+                                    values.get("messages", []) or [])
+        except Exception:
+            pass  # memory must never break a conversation
     return stream()  # the generator object, not the function (review fix)
 
 
