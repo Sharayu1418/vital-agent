@@ -306,7 +306,10 @@ export default function Chat({
             </div>
           )}
 
-          {pendingPlan && (
+          {/* Defence in depth: the planner no longer emits empty plans, but
+              a card with no rows and an Approve button is a bad enough
+              outcome to guard here too. */}
+          {pendingPlan?.items?.length > 0 && (
             <PlanCard plan={pendingPlan} editText={editText} setEditText={setEditText}
               onDecide={onDecide} busy={busy} />
           )}

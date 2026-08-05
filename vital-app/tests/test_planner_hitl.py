@@ -132,3 +132,32 @@ def test_plan_hash_is_canonical():
     b = {"tradeoffs": "t", "items": [{"x": 1}]}      # key order differs
     assert plan_hash(a) == plan_hash(b)
     assert plan_hash(a) != plan_hash({"items": [], "tradeoffs": "t"})
+
+
+# ---------- empty plans must not reach the approval gate ----------
+
+def test_empty_plan_asks_for_input_instead_of_requesting_approval():
+    """Reported from production: "plan my weekend" in a fresh thread with
+    nothing discussed. The model correctly had nothing to synthesise and
+    returned zero items, which rendered as a plan card with no rows and an
+    Approve button — and once approved, committed an empty plan whose hash
+    then made every later attempt report "already committed"."""
+    from langgraph.graph import END
+    empty = WeekPlan(items=[], tradeoffs="nothing to weigh up")
+    planner = make_planner(FakePlannerLLM([empty]))
+
+    cmd = planner({"messages": [("user", "plan my weekend")], "user_id": "u1"})
+
+    assert cmd.goto == END, "an empty plan must never reach request_approval"
+    assert cmd.update["plan_draft"] is None
+    said = cmd.update["messages"][0].content.lower()
+    assert "enough" in said or "haven't talked" in said
+    assert "already committed" not in said
+
+
+def test_a_real_plan_still_goes_to_approval():
+    """Guard against over-correcting: non-empty plans are unaffected."""
+    planner = make_planner(FakePlannerLLM([PLAN_A]))
+    cmd = planner({"messages": [("user", "plan my weekend")], "user_id": "u1"})
+    assert cmd.goto == "request_approval"
+    assert cmd.update["plan_draft"]["items"]
