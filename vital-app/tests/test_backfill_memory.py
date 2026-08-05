@@ -17,6 +17,7 @@ a test rather than a comment.
 import importlib.util
 import os
 import pathlib
+from functools import lru_cache
 
 os.environ.setdefault("GOOGLE_CLOUD_PROJECT", "test")
 os.environ.setdefault("OPENWEATHER_API_KEY", "test")
@@ -123,7 +124,15 @@ def test_the_dry_run_writes_nothing(backfill, monkeypatch):
         def delete(self, *a, **kw):
             written.append(a)
 
-    monkeypatch.setattr(backfill.memory, "get_store", lambda: Store())
+    # lru_cache, not a bare lambda: the autouse offline_embeddings fixture
+    # calls memory.get_store.cache_clear() when it tears down, and fixture
+    # finalizers run BEFORE monkeypatch undoes this — so a stand-in without
+    # cache_clear blows up in teardown, after the test itself has passed.
+    @lru_cache
+    def fake_get_store():
+        return Store()
+
+    monkeypatch.setattr(backfill.memory, "get_store", fake_get_store)
     monkeypatch.setattr(backfill.memory, "all_memories", lambda store, user: [
         {"key": "k1", "fact": "User is in Albany.", "confidence": 0.9},
         {"key": "k2", "fact": "User is near Albany.", "confidence": 0.8},
