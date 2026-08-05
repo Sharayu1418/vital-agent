@@ -46,6 +46,7 @@ def offline_embeddings(monkeypatch):
     in. Exactly the failure the crisis eval hit.
     """
     if os.environ.get("MEMORY_LIVE_EVAL") == "1":
+        yield          # MUST yield, not return — this is a generator fixture
         return
 
     import hashlib
