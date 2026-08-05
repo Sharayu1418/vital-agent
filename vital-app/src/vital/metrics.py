@@ -25,6 +25,53 @@ def _hash(user_id: str) -> str:
     return hashlib.sha256(user_id.encode()).hexdigest()[:10]
 
 
+# ---------------------------------------------------------------------------
+# Tool health.
+#
+# Written after the Reddit integration sat dead in production for months. It
+# failed on every single call, and because the tool degraded gracefully — an
+# `error` key, which the agent politely reported as "temporarily down" — the
+# outage was indistinguishable from a transient blip. Graceful degradation
+# without a failure RATE is how a dead feature hides indefinitely.
+#
+# Every tool follows the same contract (D6): a dict, with an `error` key on
+# failure. That uniformity is what lets one place observe all of them.
+# ---------------------------------------------------------------------------
+
+def tool_outcome(output) -> tuple[str, str | None]:
+    """Classify a tool's return value as ("ok" | "error", error_detail).
+
+    Pure, so the classification rule is testable without a graph. Anything
+    that is not a dict carrying `error` counts as success — deliberately
+    conservative, because inventing failures would poison the very rate we
+    want to alert on.
+    """
+    if isinstance(output, dict) and output.get("error"):
+        return "error", str(output["error"])[:200]
+    return "ok", None
+
+
+def log_tool(user_id: str, tool: str, outcome: str,
+             error: str | None = None, duration_ms: int | None = None) -> None:
+    """One line per tool call. Alert on the rate of outcome="error" per tool,
+    not on individual failures — every one of these is survivable alone, and
+    the signal that matters is "this tool has been failing for an hour".
+
+    See docs/OBSERVABILITY.md for the log-based metric and alert policy.
+    """
+    payload = {
+        "metric": "tool_call",
+        "tool": tool,
+        "outcome": outcome,
+        "user": _hash(user_id),
+    }
+    if error is not None:
+        payload["error"] = error
+    if duration_ms is not None:
+        payload["duration_ms"] = duration_ms
+    logger.info(json.dumps(payload))
+
+
 def log_turn(user_id: str, thread_id: str, routing_hops: int,
              est_tokens: int, duration_ms: int, kind: str = "chat_turn",
              heuristic_tokens: int | None = None,

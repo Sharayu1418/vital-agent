@@ -273,6 +273,9 @@ def _graph_stream(graph_input, config, user_id: str, screen=None):
         held: list[dict] = []
         gated = screen is not None
         crisis = False
+        # run_id -> start time, so tool duration can be reported alongside
+        # outcome. Popped on the matching on_tool_end.
+        tool_started: dict = {}
 
         async def is_crisis() -> bool:
             try:
@@ -294,8 +297,21 @@ def _graph_stream(graph_input, config, user_id: str, screen=None):
                         streamed_chars += len(chunk)
                         out.append({"event": "token", "data": chunk})
                 elif kind == "on_tool_start":
+                    tool_started[event.get("run_id")] = time.monotonic()
                     out.append({"event": "status",
                                 "data": f"{node}: using {event['name']}"})
+                elif kind == "on_tool_end":
+                    # Observe EVERY tool here rather than inside each tool.
+                    # One place, and a new tool is covered the day it is
+                    # added — nobody has to remember to instrument it.
+                    started = tool_started.pop(event.get("run_id"), None)
+                    outcome, detail = metrics.tool_outcome(
+                        (event.get("data") or {}).get("output"))
+                    metrics.log_tool(
+                        user_id, event.get("name", "unknown"), outcome,
+                        error=detail,
+                        duration_ms=(int((time.monotonic() - started) * 1000)
+                                     if started else None))
                 elif kind == "on_chat_model_end":
                     real_tokens += guardrails.tokens_from_model_end(event)
                     if real_tokens >= remaining:

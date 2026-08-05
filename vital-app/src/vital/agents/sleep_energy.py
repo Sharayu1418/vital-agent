@@ -28,29 +28,34 @@ def get_sleep_history(days: int = 14) -> list[dict]:
 
 
 @tool
-def analyze_sleep_data(question: str) -> str:
+def analyze_sleep_data(question: str) -> dict:
     """Run a real Python/pandas analysis over the user's UPLOADED sleep data
     (Apple Health / CSV). Use for anything statistical: sleep debt over weeks,
     bedtime consistency, weekday-vs-weekend patterns, trends.
     Ask a specific question, e.g. 'sleep debt vs 8h target over the last
     14 days' or 'bedtime standard deviation weekdays vs weekends'.
-    Returns a plain-language insight, or a note if no data is uploaded.
-    This may take ~10-20 seconds."""
+    Returns {'insight': ...}, or {'no_data': ...} when nothing is uploaded,
+    or {'error': ...} when live analysis is down — in which case say so and
+    fall back to get_sleep_history. This may take ~10-20 seconds."""
     from vital import ingest
     from vital.analysis import run_analysis
 
     data = ingest.sleep_csv_bytes(storage.current_user_id.get())
     if data is None:
-        return ("no uploaded sleep data — the user can upload an Apple Health "
-                "export or CSV at /upload/health, or you can use "
-                "get_sleep_history for manually logged nights")
+        # NOT an error: nothing is broken, the user simply hasn't uploaded.
+        # Distinct key so it doesn't inflate the tool failure rate.
+        return {"no_data": (
+            "no uploaded sleep data — the user can upload an Apple Health "
+            "export or CSV, or you can use get_sleep_history for manually "
+            "logged nights")}
     try:
-        return run_analysis(question, data, ingest.csv_preview(data))
+        return {"insight": run_analysis(question, data, ingest.csv_preview(data))}
     except Exception as exc:  # E2B key/quota/timeout, Vertex errors, ...
-        # infra failure must degrade the answer, not kill the conversation (D6 policy)
-        return ("analysis temporarily unavailable "
-                f"({type(exc).__name__}) — tell the user live analysis is down, "
-                "then fall back to get_sleep_history for a best-effort answer")
+        # infra failure must degrade the answer, not kill the conversation
+        # (D6 policy). Returns a dict with `error` like every other tool, so
+        # the central tool-health logging in api.py can see E2B failing —
+        # as a bare string this was the one paid dependency invisible to it.
+        return {"error": f"analysis unavailable ({type(exc).__name__})"}
 
 
 SYSTEM_PROMPT = """You are VITAL's Sleep & Energy agent. Be concrete and \
@@ -61,7 +66,11 @@ When the user reports sleep or tiredness:
 2. Pull history (get_sleep_history) before analyzing anything.
 3. For statistical questions (trends, consistency, weekly patterns), use
    analyze_sleep_data — it runs real pandas code on their uploaded data.
-   Prefer it over manual math whenever they have uploaded data.
+   Prefer it over manual math whenever they have uploaded data. It returns
+   {'insight': ...} to use, {'no_data': ...} meaning they haven't uploaded
+   anything yet (invite them to, don't call it an error), or {'error': ...}
+   meaning live analysis is down (say so, then fall back to
+   get_sleep_history for a best-effort answer).
 4. Report: sleep debt vs an 8h/night target over the window you have,
    tonight's target bedtime (specific time), and today's likely energy
    peak (~3-5h after wake) and dip (~7-9h after wake) with what to
