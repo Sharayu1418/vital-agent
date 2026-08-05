@@ -58,6 +58,10 @@ export default function Home() {
   const activeIdRef = useRef(null);
   // in-flight stream, so a thread switch or the stop button can cancel it
   const abortRef = useRef(null);
+  // Synchronous send guard. `busy` is state, so it is still false when a
+  // second submit arrives in the same tick — double-tapping Enter got two
+  // user bubbles past the check. A ref updates immediately.
+  const sendingRef = useRef(false);
 
   // ---- boot: daylight theme + prefs + auth subscription ----
   useEffect(() => {
@@ -446,7 +450,8 @@ export default function Home() {
   async function send(text) {
     // authReady gate: a message sent before the initial Firebase state is
     // known could land under the wrong identity
-    if (!text.trim() || busy || !activeId || !authReady) return;
+    if (!text.trim() || busy || sendingRef.current || !activeId || !authReady) return;
+    sendingRef.current = true;
     setBusy(true);
     setThinking(true);
     setInput("");
@@ -477,6 +482,7 @@ export default function Home() {
           text: "Can't reach the backend. Is it running?" }]);
       }
     } finally {
+      sendingRef.current = false;
       if (abortRef.current === controller) abortRef.current = null;
       // a stale completion must not flip busy/thinking while the NEXT
       // identity is mid-request; signOut resets these synchronously

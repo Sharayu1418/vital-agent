@@ -27,8 +27,10 @@ def search_places(query: str, city: str, max_results: int = 5) -> dict:
     Use specific activity queries, not generic ones:
     GOOD: 'bouldering gym', 'pottery class', 'hiking trail', 'board game cafe'
     BAD: 'fun things', 'activities'
-    Returns {'venues': [...]} with ratings and Google Maps links — include the
-    maps_url in your recommendation so the user can act on it immediately.
+    Returns {'venues': [...]} with ratings and Google Maps links. Render each
+    one as a MARKDOWN LINK on the venue name — [The Court Club](maps_url) —
+    never as a bare URL: these are long ?cid= links that wrap over several
+    lines and make the answer unreadable.
     If the result contains an 'error' key, live venue search is down: say so,
     and give best-effort general suggestions clearly marked as unverified.
     """
