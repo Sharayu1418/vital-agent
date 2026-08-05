@@ -43,33 +43,55 @@ def main() -> int:
 
     embed = memory.index_config()["embed"]
 
-    def vectors(texts):
+    # TWO measurements, because they are not the same number.
+    #
+    # doc-doc  : both texts embedded as documents. Symmetric, and what a
+    #            naive tuner reports.
+    # doc-query: the STORED fact as a document, the INCOMING fact as a
+    #            query — which is what store.search(query=...) actually
+    #            does at runtime.
+    #
+    # text-embedding-004 is task-typed (RETRIEVAL_DOCUMENT vs
+    # RETRIEVAL_QUERY), so these can differ substantially. Calibrating on
+    # doc-doc and enforcing on doc-query is how the first two thresholds
+    # were wrong: 0.93 measured, but dedup never fired.
+    def as_docs(texts):
         if hasattr(embed, "embed_documents"):
             return embed.embed_documents(list(texts))
         return embed(list(texts))
 
+    def as_query(text):
+        if hasattr(embed, "embed_query"):
+            return embed.embed_query(text)
+        return embed([text])[0]
+
+    def both(a, b):
+        (da, db) = as_docs([a, b])
+        return cosine(da, db), cosine(da, as_query(b))
+
     print("\nSHOULD MERGE — variants of one fact")
-    print("-" * 64)
-    vecs = vectors(ALBANY_DUPLICATES)
+    print(f"{'doc-doc':>10} {'doc-query':>11}   (runtime uses doc-query)")
+    print("-" * 72)
     merge_scores = []
-    for (i, a), (j, b) in itertools.combinations(enumerate(ALBANY_DUPLICATES), 2):
-        score = cosine(vecs[i], vecs[j])
-        merge_scores.append(score)
-        print(f"  {score:.3f}  {a[:34]:36} | {b[:34]}")
+    for a, b in itertools.combinations(ALBANY_DUPLICATES, 2):
+        sym, runtime = both(a, b)
+        merge_scores.append(runtime)
+        print(f"  {sym:8.3f} {runtime:10.3f}   {a[:26]:28} | {b[:26]}")
 
     print("\nMUST NOT MERGE — genuinely different facts")
-    print("-" * 64)
+    print(f"{'doc-doc':>10} {'doc-query':>11}")
+    print("-" * 72)
     keep_scores = []
     for a, b in DISTINCT_PAIRS:
-        va, vb = vectors([a, b])
-        score = cosine(va, vb)
-        keep_scores.append(score)
-        print(f"  {score:.3f}  {a[:34]:36} | {b[:34]}")
+        sym, runtime = both(a, b)
+        keep_scores.append(runtime)
+        print(f"  {sym:8.3f} {runtime:10.3f}   {a[:26]:28} | {b[:26]}")
 
     lowest_merge = min(merge_scores)
     highest_keep = max(keep_scores)
 
-    print("\n" + "=" * 64)
+    print("\n" + "=" * 72)
+    print("  Using the doc-query column — that is what dedup compares.")
     print(f"  lowest  'should merge'  similarity : {lowest_merge:.3f}")
     print(f"  highest 'must not merge' similarity: {highest_keep:.3f}")
 

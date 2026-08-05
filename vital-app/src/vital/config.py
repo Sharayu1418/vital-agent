@@ -73,21 +73,32 @@ class Settings(BaseSettings):
     # "ceramics" never retrieved a stored "pottery" fact.
     embedding_model: str = "text-embedding-004"
     embedding_dims: int = 768          # text-embedding-004 output size
-    # Cosine similarity above which a new fact OVERWRITES an existing one
-    # rather than being stored alongside it.
+    # Cosine similarity above which a new fact OVERWRITES an existing one.
     #
-    # MEASURED, not guessed — scripts/tune_memory_threshold.py against real
-    # text-embedding-004 vectors, 5 Aug 2026:
+    # THIS NUMBER LOOKS LOW ON PURPOSE. Dedup compares a QUERY embedding
+    # against stored DOCUMENT embeddings, because it goes through
+    # store.search(query=...). text-embedding-004 is task-typed
+    # (RETRIEVAL_QUERY vs RETRIEVAL_DOCUMENT), and those vectors do not
+    # share a space — the same pair of sentences scores ~0.24 lower on the
+    # query path than document-to-document.
     #
-    #   should merge   (Albany variants)  min 0.930
-    #   must not merge (distinct facts)   max 0.800
+    # MEASURED on the runtime path — scripts/tune_memory_threshold.py,
+    # 5 Aug 2026:
     #
-    # 0.87 sits mid-gap. The first attempt was a guessed 0.82, which left
-    # all four Albany rows in place — the live eval caught it. Re-run the
-    # tuner before changing this, and note the failure directions are NOT
-    # symmetric: too high leaves duplicates, too low silently eats distinct
-    # memories.
-    memory_dedup_threshold: float = 0.87
+    #                            doc-doc      doc-query (what dedup sees)
+    #   should merge   min        0.930          0.694
+    #   must not merge max       0.800          0.559
+    #
+    # 0.63 sits mid-gap on the doc-query scale. Two earlier values, 0.82 and
+    # 0.87, were calibrated against doc-doc and enforced against doc-query,
+    # so dedup could never fire at all — the tuner and the code were
+    # measuring different things.
+    #
+    # test_memory_live.py::test_the_threshold_still_sits_between_the_bands
+    # re-measures and fails if that ever stops holding. The failure
+    # directions are NOT symmetric: too high leaves duplicates, too low
+    # silently eats distinct memories.
+    memory_dedup_threshold: float = 0.63
 
     # --- Phase 3: events provider (free key: developer.ticketmaster.com) ---
     ticketmaster_api_key: str | None = None
