@@ -37,7 +37,17 @@ def offline_embeddings(monkeypatch):
     thresholds to do it. Real semantic quality is measured against live
     embeddings in test_memory_live.py, the same split used for the crisis
     classifier.
+
+    Skipped under MEMORY_LIVE_EVAL=1. This fixture is function-scoped and
+    autouse, so without the guard it re-ran for every live test and forced
+    EMBEDDING_DIMS=16 — the live eval then built a 16-dimension index around
+    a 768-dimension embedder, similarities collapsed, and it reported that
+    the threshold was wrong when the real problem was the stand-in leaking
+    in. Exactly the failure the crisis eval hit.
     """
+    if os.environ.get("MEMORY_LIVE_EVAL") == "1":
+        return
+
     import hashlib
     import re
 

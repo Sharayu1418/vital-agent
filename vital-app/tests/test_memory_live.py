@@ -80,13 +80,14 @@ def live_credentials():
 
 
 def _real_store():
-    """A store using REAL embeddings, bypassing conftest's stand-in."""
-    import importlib
+    """A store using REAL embeddings.
 
+    No module reload needed: conftest's offline embedder skips itself under
+    MEMORY_LIVE_EVAL=1, so vital.memory is already unpatched.
+    """
     from langgraph.store.memory import InMemoryStore
 
     from vital import memory
-    importlib.reload(memory)
     return memory, InMemoryStore(index=memory.index_config())
 
 
@@ -122,14 +123,19 @@ def test_recall_finds_a_fact_by_meaning_not_words():
     """The retrieval half. Keyword overlap could never do this — the query
     and the fact share no content words."""
     memory, store = _real_store()
-    for fact in ["User is into ceramics.",
-                 "User dislikes gyms.",
-                 "User lives in Albany."]:
+    # ceramics goes in LAST on purpose: if the vector index is broken the
+    # store returns insertion order, and a first-position answer would let
+    # this test pass without any semantic search happening at all
+    for fact in ["User dislikes gyms.",
+                 "User lives in Albany.",
+                 "User is into ceramics."]:
         memory.remember(store, "live-user-2", "…", _extractor(memory, fact))
 
     top = memory.recall(store, "live-user-2", "any pottery classes nearby?", limit=1)
     print(f"\n  'pottery' query -> {top}")
-    assert top == ["User is into ceramics."]
+    assert top == ["User is into ceramics."], (
+        "query and fact share no words — only real embeddings can connect "
+        "pottery to ceramics")
 
 
 def _extractor(memory_mod, fact_text):
