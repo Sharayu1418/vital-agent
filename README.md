@@ -30,7 +30,7 @@ VITAL separates those responsibilities into focused agents:
 | Activity Scout | Combines weather, Google Places, time, budget, and energy to suggest real activities |
 | Sleep and Energy | Records sleep, reads recent patterns, and analyzes uploaded Apple Health or CSV data |
 | Idea Generator | Turns interests and constraints into concrete, personalized ideas |
-| People Connector | Helps users discover public activities, events, and opt-in activity buddies |
+| People Connector | Finds opt-in activity buddies, the places an activity actually happens, and public events |
 | Planner | Produces structured plans with timing, rationale, and tradeoffs |
 | Memory Writer | Extracts durable, user-specific facts after useful agent turns |
 
@@ -337,8 +337,9 @@ VITAL is an actively developed product. Current technical boundaries include:
 
 - Long-term memory retrieval uses keyword overlap rather than vector search.
 - Approved plans commit to VITAL's relational calendar, not Google Calendar.
-- Apple Health XML ingestion is normalized correctly but is not yet streaming for very large exports.
-- Token accounting is estimated rather than provider-meter exact.
+- Community discovery has no third-party provider by design — Reddit, Meetup, Facebook Groups, Eventbrite search and Strava clubs have all closed or gone paid since 2019. It runs on Google Places and the Activity Buddy Board instead; see [docs/LIMITATIONS.md](docs/LIMITATIONS.md).
+- Conversation history is not trimmed, so long threads grow in cost and latency.
+- Health uploads stream and are memory-safe, but Cloud Run caps HTTP/1.1 bodies at 32MB; larger Apple Health exports need a signed-URL upload to GCS.
 - Without `DATABASE_URL`, graph checkpoints are process-local and do not survive restarts.
 - Production is currently designed around a single deployment region.
 - Recommendations are informational and are not medical or mental-health advice.
