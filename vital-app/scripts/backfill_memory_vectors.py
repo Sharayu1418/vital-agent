@@ -34,6 +34,7 @@ already indexed.
 """
 import argparse
 import sys
+from functools import lru_cache
 
 sys.path.insert(0, "src")
 
@@ -77,19 +78,42 @@ def plan_for_user(store, user_id: str) -> tuple[list, list]:
     return kept, merged
 
 
-def _similarity(store, a: str, b: str) -> float | None:
-    """Cosine similarity between two fact strings, via the store's own
-    embedder — so the script and the app agree by construction."""
+@lru_cache
+def _embedder():
+    """One client for the whole run. index_config() builds a fresh one each
+    call, and this is invoked per candidate pair."""
+    return memory.index_config()["embed"]
+
+
+def _similarity(store, keeper: str, candidate: str) -> float | None:
+    """Similarity as the APP computes it: the surviving fact as a DOCUMENT,
+    the incoming one as a QUERY.
+
+    This asymmetry is not a detail. At runtime dedup goes through
+    store.search(query=...), so it compares RETRIEVAL_QUERY against
+    RETRIEVAL_DOCUMENT vectors. text-embedding-004 is task-typed and those
+    score ~0.24 LOWER than document-to-document for the same pair.
+
+    Embedding both sides as documents here — which this script used to do —
+    inflates every score onto a scale MEMORY_DEDUP_THRESHOLD was never
+    calibrated for. Measured 5 Aug 2026, the most similar pair that must NOT
+    merge scores 0.559 on the query path but 0.800 on the document path. At
+    a threshold of 0.63 that flips the script from correct to merging every
+    distinct fact it sees — silent data loss across the whole store, in the
+    one operation that deletes rows.
+    """
     import math
 
-    embed = memory.index_config()["embed"]
-    vectors = (embed.embed_documents([a, b]) if hasattr(embed, "embed_documents")
-               else embed([a, b]))
-    va, vb = vectors[0], vectors[1]
-    dot = sum(x * y for x, y in zip(va, vb))
-    na = math.sqrt(sum(x * x for x in va)) or 1.0
-    nb = math.sqrt(sum(x * x for x in vb)) or 1.0
-    return dot / (na * nb)
+    embed = _embedder()
+    if hasattr(embed, "embed_documents"):
+        doc = embed.embed_documents([keeper])[0]
+        query = embed.embed_query(candidate)
+    else:                                    # offline stand-in: one callable
+        doc, query = embed([keeper, candidate])
+    dot = sum(x * y for x, y in zip(doc, query))
+    nd = math.sqrt(sum(x * x for x in doc)) or 1.0
+    nq = math.sqrt(sum(x * x for x in query)) or 1.0
+    return dot / (nd * nq)
 
 
 def main() -> int:
