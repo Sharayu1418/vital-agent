@@ -74,9 +74,20 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-004"
     embedding_dims: int = 768          # text-embedding-004 output size
     # Cosine similarity above which a new fact OVERWRITES an existing one
-    # rather than being stored alongside it. Tuned against the real Albany
-    # duplicates — see tests/test_memory_semantic.py.
-    memory_dedup_threshold: float = 0.82
+    # rather than being stored alongside it.
+    #
+    # MEASURED, not guessed — scripts/tune_memory_threshold.py against real
+    # text-embedding-004 vectors, 5 Aug 2026:
+    #
+    #   should merge   (Albany variants)  min 0.930
+    #   must not merge (distinct facts)   max 0.800
+    #
+    # 0.87 sits mid-gap. The first attempt was a guessed 0.82, which left
+    # all four Albany rows in place — the live eval caught it. Re-run the
+    # tuner before changing this, and note the failure directions are NOT
+    # symmetric: too high leaves duplicates, too low silently eats distinct
+    # memories.
+    memory_dedup_threshold: float = 0.87
 
     # --- Phase 3: events provider (free key: developer.ticketmaster.com) ---
     ticketmaster_api_key: str | None = None

@@ -101,11 +101,14 @@ distinction the data doesn't support.
   (`HISTORY_LIMIT`) but not *summarised*, so a very long thread loses early
   context rather than compressing it. Durable facts survive in long-term
   memory, which is injected separately.
-- Memory dedup and recall are semantic, but the threshold
-  (`MEMORY_DEDUP_THRESHOLD`, 0.82) is tuned against a small set of real
-  cases in `tests/test_memory_live.py`. Too high and duplicates return; too
-  low and distinct memories get merged, which is the worse failure. Re-run
-  that eval before changing it.
+- Memory dedup and recall are semantic. The threshold
+  (`MEMORY_DEDUP_THRESHOLD`, 0.87) was **measured**, not guessed:
+  `scripts/tune_memory_threshold.py` puts the least-similar pair that
+  should merge at 0.930 and the most-similar pair that must not at 0.800.
+  Sample size is small — four real duplicates and four distinct pairs — so
+  re-run the tuner if dedup starts behaving oddly, and add the offending
+  case to it. The failure directions are not symmetric: too high leaves
+  duplicates, too low silently eats distinct memories.
 - Every memory write and recall now costs an embedding call. Small, but on
   the hot path.
 - Health uploads stream and are memory-safe, but Cloud Run caps HTTP/1.1
