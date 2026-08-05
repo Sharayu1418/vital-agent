@@ -9,13 +9,15 @@ import Chat from "./components/Chat";
 import { MenuIcon, PanelRightIcon, SpeakerIcon, UploadIcon } from "./components/icons";
 import Sidebar from "./components/Sidebar";
 import SidePanel from "./components/SidePanel";
-import { api, setTokenProvider, setUnauthorizedHandler } from "./lib/api";
+import {
+  api, bootstrapSession, resetSession, setTokenProvider, setUnauthorizedHandler,
+} from "./lib/api";
 import {
   anonAllowed, clearSessionTransport, consumeRedirectResult, gateFor, idToken,
   signInWithGoogle, signOutUser, watchAuth,
 } from "./lib/auth";
 import { firebaseConfigured } from "./lib/firebase";
-import { createGenerationGuard } from "./lib/guard";
+import { createGenerationGuard, createThreadGuard, shouldApplyChunk } from "./lib/guard";
 import { shouldRequestDeviceLocation } from "./lib/location";
 import { isSynthesisSupported } from "./lib/speech";
 import { applyEvent, initialStream, shouldKeepBubble, sseEvents } from "./lib/stream";
@@ -50,6 +52,16 @@ export default function Home() {
   // account change invalidates it so stale responses can't write state
   const guardRef = useRef(createGenerationGuard());
   const reauthInFlightRef = useRef(false);
+  // consume() closes over `activeId` at send time, which is stale by the
+  // time chunks arrive — a ref is the only way to see the CURRENT thread
+  // from inside a running stream.
+  const activeIdRef = useRef(null);
+  // in-flight stream, so a thread switch or the stop button can cancel it
+  const abortRef = useRef(null);
+  // Synchronous send guard. `busy` is state, so it is still false when a
+  // second submit arrives in the same tick — double-tapping Enter got two
+  // user bubbles past the check. A ref updates immediately.
+  const sendingRef = useRef(false);
 
   // ---- boot: daylight theme + prefs + auth subscription ----
   useEffect(() => {
@@ -165,7 +177,13 @@ export default function Home() {
     if (gate !== "app") return undefined;
     const live = guardRef.current.begin();  // new identity epoch
     setAuthError(null);   // reached the app → no reauth prompt should linger
+    resetSession();       // this account bootstraps its own session
     (async () => {
+      // P1-9: one awaited identity call before ANY parallel work. Below,
+      // refreshPanel() and loadHistory() are deliberately not awaited and
+      // run concurrently — without this they would race to mint sessions.
+      await bootstrapSession().catch(() => {});
+      if (!live()) return;
       let list = loadThreads(localStorage);
       if (authUser) {
         try {
@@ -177,6 +195,7 @@ export default function Home() {
       if (list.length === 0) list = [newThread()];
       setThreads(list);
       saveThreads(list, localStorage);
+      activeIdRef.current = list[0].id;
       setActiveId(list[0].id);
       setMessages([]);
       setPendingPlan(null);
@@ -207,10 +226,13 @@ export default function Home() {
     // network round-trip — and every in-flight load started under this
     // account is invalidated so it can't write state afterwards.
     guardRef.current.invalidate();
+    resetSession();   // next identity must bootstrap its own session
     clearSessionTransport(localStorage);
     localStorage.removeItem("vital_threads");  // anon reload starts clean
+    abortStream();          // an account's stream must not outlive sign-out
     const fresh = newThread();
     setThreads([fresh]);
+    activeIdRef.current = fresh.id;
     setActiveId(fresh.id);
     setMessages([]);
     setPendingPlan(null);
@@ -257,18 +279,34 @@ export default function Home() {
   const refreshPanel = useCallback(async () => {
     const live = guardRef.current.watch();  // stale after sign-out/switch
     try {
-      const [s, c, m] = await Promise.all([
+      // P1-9: settle identity BEFORE fanning out, or three parallel calls
+      // can each mint a different anonymous session
+      await bootstrapSession().catch(() => {});
+
+      // P1-10: allSettled, not all. With Promise.all a single failing
+      // endpoint rejected the whole batch and the catch below silently
+      // blanked the entire panel — sleep, calendar and memories together.
+      // Each section should survive its neighbours failing.
+      const [s, c, m] = await Promise.allSettled([
         api.sleepRecent(), api.calendar(), api.memories(),
       ]);
+      const ok = (r) => (r.status === "fulfilled" && r.value.ok ? r.value : null);
+      const read = async (r, pick) => {
+        const res = ok(r);
+        if (!res) return null;
+        try {
+          return pick(await res.json());
+        } catch { return null; }   // malformed body: drop that section only
+      };
       // parse everything FIRST — body parsing is itself async, so the
       // liveness check must come immediately before the state writes
-      const sleepBody = s.ok ? await s.json() : null;
-      const eventsBody = c.ok ? (await c.json()).events : null;
-      const memoriesBody = m.ok ? (await m.json()).memories : null;
+      const sleepBody = await read(s, (b) => b);
+      const eventsBody = await read(c, (b) => b.events);
+      const memoriesBody = await read(m, (b) => b.memories);
       if (!live()) return;
       // a working authenticated request proves we're not stuck — retire any
       // lingering "sign in again" notice (keeps the reauth prompt non-sticky)
-      if (s.ok || c.ok || m.ok) setAuthError(null);
+      if (ok(s) || ok(c) || ok(m)) setAuthError(null);
       if (sleepBody) setSleep(sleepBody);
       if (eventsBody) setEvents(eventsBody);
       if (memoriesBody) setMemories(memoriesBody);
@@ -293,19 +331,33 @@ export default function Home() {
   }
 
   // ---- thread ops ----
+  /* activeIdRef mirrors activeId so running streams can read the CURRENT
+   * thread. Every setActiveId goes through here — a bare setActiveId would
+   * leave the ref stale and silently reopen the cross-thread bug. */
+  function goToThread(id) {
+    activeIdRef.current = id;
+    setActiveId(id);
+  }
+
   function selectThread(id) {
     if (id === activeId) return;
-    setActiveId(id);
+    abortStream();          // don't let the old thread's answer follow us
+    setBusy(false);
+    setThinking(false);
+    goToThread(id);
     setSidebarOpen(false);
     loadHistory(id);
   }
 
   function createThread() {
+    abortStream();
+    setBusy(false);
+    setThinking(false);
     const t = newThread();
     const list = [t, ...threads];
     setThreads(list);
     saveThreads(list, localStorage);
-    setActiveId(t.id);
+    goToThread(t.id);
     setMessages([]);
     setPendingPlan(null);
     setSidebarOpen(false);
@@ -318,7 +370,10 @@ export default function Home() {
     setThreads(next);
     saveThreads(next, localStorage);
     if (id === activeId) {
-      setActiveId(next[0].id);
+      abortStream();
+      setBusy(false);
+      setThinking(false);
+      goToThread(next[0].id);
       loadHistory(next[0].id);
     }
     // Signed in: unlist server-side too, or the row reappears on the next
@@ -345,12 +400,17 @@ export default function Home() {
   }
 
   // ---- streaming ----
-  async function consume(response, live) {
+  /* `threadId` is the thread this stream was started FOR. Two independent
+   * guards apply: `live()` (right identity) and `belongs()` (right thread).
+   * Without the second, switching chats mid-answer dropped the old thread's
+   * tokens into the new thread's transcript. */
+  async function consume(response, live, threadId) {
+    const belongs = createThreadGuard(() => activeIdRef.current, threadId);
     const id = uid();
     let st = initialStream();
     let placed = false;
     const sync = () => {
-      if (!live()) return;  // stream outlived its identity: stop writing
+      if (!shouldApplyChunk(live(), belongs())) return;
       if (!placed) {
         placed = true;
         setThinking(false);
@@ -362,24 +422,36 @@ export default function Home() {
     };
 
     for await (const ev of sseEvents(response)) {
-      if (!live()) break;  // identity changed: stop consuming, not just writing
+      // identity OR thread changed: stop consuming, not just writing
+      if (!shouldApplyChunk(live(), belongs())) break;
       st = applyEvent(st, ev);
-      if (ev.event === "approval_required") setPendingPlan(st.plan);
+      // a plan belongs to its own thread too — never surface A's plan card
+      // while the user is reading thread B
+      if (ev.event === "approval_required" && belongs()) setPendingPlan(st.plan);
       if (st.text || st.status) sync();
     }
     if (!live()) return;   // busy/thinking now belong to the next identity
     setThinking(false);
-    if (placed) {
+    if (placed && belongs()) {
       st = { ...st, status: null };
       sync();
       if (!shouldKeepBubble(st)) setMessages((m) => m.filter((msg) => msg.id !== id));
     }
   }
 
+  /* Cancel whatever is streaming. Used by the stop button and by any thread
+   * switch. Partial text already on screen is deliberately kept — the user
+   * asked to stop, not to undo. */
+  function abortStream() {
+    abortRef.current?.abort();
+    abortRef.current = null;
+  }
+
   async function send(text) {
     // authReady gate: a message sent before the initial Firebase state is
     // known could land under the wrong identity
-    if (!text.trim() || busy || !activeId || !authReady) return;
+    if (!text.trim() || busy || sendingRef.current || !activeId || !authReady) return;
+    sendingRef.current = true;
     setBusy(true);
     setThinking(true);
     setInput("");
@@ -389,18 +461,29 @@ export default function Home() {
     setThreads(renamed);
     saveThreads(renamed, localStorage);
     const live = guardRef.current.watch();
+    const sentFor = activeId;          // pin the thread this answer belongs to
+    abortStream();                     // never two streams at once
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
-      const r = await api.chat(text, activeId);
+      const r = await api.chat(text, sentFor, controller.signal);
       if (!r.ok) {
         const detail = (await r.json().catch(() => ({}))).detail ?? `Server error (${r.status})`;
-        if (live()) setMessages((m) => [...m, { id: uid(), role: "ai", text: detail }]);
+        if (live() && activeIdRef.current === sentFor) {
+          setMessages((m) => [...m, { id: uid(), role: "ai", text: detail }]);
+        }
       } else {
-        await consume(r, live);
+        await consume(r, live, sentFor);
       }
-    } catch {
-      if (live()) setMessages((m) => [...m, { id: uid(), role: "ai",
-        text: "Can't reach the backend. Is it running?" }]);
+    } catch (err) {
+      // cancelling is a user action, not a failure — no scary error bubble
+      if (err?.name !== "AbortError" && live() && activeIdRef.current === sentFor) {
+        setMessages((m) => [...m, { id: uid(), role: "ai",
+          text: "Can't reach the backend. Is it running?" }]);
+      }
     } finally {
+      sendingRef.current = false;
+      if (abortRef.current === controller) abortRef.current = null;
       // a stale completion must not flip busy/thinking while the NEXT
       // identity is mid-request; signOut resets these synchronously
       if (live()) {
@@ -411,6 +494,14 @@ export default function Home() {
     }
   }
 
+  /* Stop button. Ends the turn immediately and leaves whatever streamed so
+   * far on screen. */
+  function stopStreaming() {
+    abortStream();
+    setBusy(false);
+    setThinking(false);
+  }
+
   async function decide(action, feedback = "") {
     if (busy) return;
     setBusy(true);
@@ -418,15 +509,24 @@ export default function Home() {
     setPendingPlan(null);
     setEditText("");
     const live = guardRef.current.watch();
+    const sentFor = activeId;
+    abortStream();
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
-      const r = await api.approve(action, feedback, activeId);
+      const r = await api.approve(action, feedback, sentFor, controller.signal);
       if (!r.ok) {
         const detail = (await r.json().catch(() => ({}))).detail ?? `Server error (${r.status})`;
-        if (live()) setMessages((m) => [...m, { id: uid(), role: "ai", text: detail }]);
+        if (live() && activeIdRef.current === sentFor) {
+          setMessages((m) => [...m, { id: uid(), role: "ai", text: detail }]);
+        }
       } else {
-        await consume(r, live);
+        await consume(r, live, sentFor);
       }
+    } catch (err) {
+      if (err?.name !== "AbortError") throw err;
     } finally {
+      if (abortRef.current === controller) abortRef.current = null;
       if (live()) {
         setBusy(false);
         setThinking(false);
@@ -530,7 +630,8 @@ export default function Home() {
         <Chat messages={messages} pendingPlan={pendingPlan} busy={busy}
           thinking={thinking} input={input} setInput={setInput}
           editText={editText} setEditText={setEditText}
-          onSend={send} onDecide={decide} onRate={rate} nudge={nudgeFor()}
+          onSend={send} onStop={stopStreaming} onDecide={decide} onRate={rate}
+          nudge={nudgeFor()}
           autoRead={autoRead} userName={userName} onSaveName={saveName}
           suggestedName={authUser?.displayName ?? ""} />
       </main>

@@ -63,12 +63,43 @@ class Settings(BaseSettings):
     # --- Phase 3: events provider (free key: developer.ticketmaster.com) ---
     ticketmaster_api_key: str | None = None
 
+    # --- Reddit (community search) ---
+    # The keyless www.reddit.com JSON endpoint works from a laptop but Reddit
+    # blocks datacenter IPs, so on Cloud Run it failed EVERY time and the
+    # People Connector's community half was silently dead in production.
+    # App-only OAuth (client credentials) fixes that. Create an app of type
+    # "script" at https://www.reddit.com/prefs/apps — no user account is
+    # involved, we only read public subreddit listings.
+    # Unset -> fall back to the keyless endpoint, which is still fine locally.
+    reddit_client_id: str | None = None
+    reddit_client_secret: str | None = None
+    # Reddit asks for a descriptive UA and rate-limits generic ones harder.
+    reddit_user_agent: str = "vital-app/0.5 (wellness copilot; community search)"
+
     # --- Phase 4: guardrails ---
     daily_token_budget: int = 50_000   # per user; ~$0.05/day at Flash prices
+    # Hard ceiling on the crisis screen's model call. Past this we stop
+    # waiting and fall back to deterministic matching — a distressed person
+    # must never sit on a spinner because Vertex is slow.
+    crisis_timeout_seconds: float = 4.0
     recursion_limit: int = 25          # hard cap on graph steps per turn
 
     # --- Phase 5: frontend origin for CORS (Vercel URL in prod) ---
     frontend_origin: str = "http://localhost:3000"
+    # Optional anchored regex for additional allowed origins — in practice
+    # Vercel preview deployments, which get a fresh subdomain per branch and
+    # are otherwise blocked by the single-origin allowlist above (P1-12).
+    #
+    # OPT-IN ON PURPOSE. It would be easy to derive this from
+    # frontend_origin ("vital-agent.vercel.app" -> "vital-agent-*.vercel.app")
+    # but that would be a security bug: *.vercel.app is a shared namespace,
+    # so anyone can register a project whose subdomain matches the wildcard.
+    # Combined with allow_credentials=True, that would hand a stranger's
+    # site the ability to make authenticated requests as your users. Write
+    # the pattern deliberately, anchored, and keep it as tight as possible.
+    #
+    #   PREVIEW_ORIGIN_REGEX=^https://vital-agent-git-[a-z0-9-]+-myteam\.vercel\.app$
+    preview_origin_regex: str | None = None
 
 
 @lru_cache

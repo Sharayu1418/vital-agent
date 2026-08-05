@@ -65,6 +65,21 @@ def make_planner(llm):
             prompt += (f"\n\nThe user reviewed your previous draft and asked: "
                        f"'{edit}'. Revise accordingly; keep what they didn't question.")
         plan = structured.invoke([SystemMessage(content=prompt), *state["messages"]])
+
+        # An empty plan must never reach the approval gate. Asked to "plan my
+        # weekend" in a fresh thread with nothing discussed, the model
+        # correctly has nothing to synthesise and returns zero items — which
+        # rendered as a plan card with no rows and two buttons, and, once
+        # approved, committed an empty plan whose hash then made every later
+        # attempt report "that plan was already committed".
+        if not plan.items:
+            return Command(goto=END, update={"plan_draft": None, "messages": [
+                AIMessage(content=(
+                    "I don't have enough to work with yet — we haven't talked "
+                    "about what you actually want to do. Tell me what you're "
+                    "hoping to fit in (or ask me for ideas first), and I'll "
+                    "build the schedule around it."))]})
+
         return Command(goto="request_approval",
                        update={"plan_draft": plan.model_dump(), "edit_request": None})
     return planner

@@ -58,3 +58,49 @@ def test_route(message: str, expected: str):
         [SystemMessage(content=ROUTER_PROMPT), HumanMessage(content=message)]
     )
     assert decision.next == expected, f"'{message}' -> {decision.next} ({decision.reasoning})"
+
+
+# ---------- topology: one supervisor call, one specialist ----------
+
+def test_agent_nodes_end_the_turn_instead_of_looping_back():
+    """Production ran 5 agent hops per message. Agents returned to the
+    supervisor via the memory writer, and the supervisor could not tell an
+    agent had already answered, so it re-routed until the guard fired.
+    Agents now go straight to END."""
+    from langgraph.graph import END
+    from vital.graph import _agent_node
+
+    class FakeAgent:
+        def invoke(self, payload):
+            from langchain_core.messages import AIMessage
+            return {"messages": [*payload["messages"], AIMessage(content="answered")]}
+
+    class FakeStore:
+        def search(self, *_a, **_k):
+            return []
+
+    node = _agent_node(FakeAgent(), FakeStore())
+    cmd = node({"messages": [("user", "hi")], "user_id": "u1"})
+    assert cmd.goto == END, "an agent must not hand control back to the supervisor"
+
+
+def test_memory_extraction_is_no_longer_a_graph_node():
+    """It sat between the answer and `done`, locking the composer during a
+    model call the user cannot see. It is called from the API after `done`."""
+    import vital.graph as graph_mod
+    assert not hasattr(graph_mod, "_memory_writer")
+    assert callable(graph_mod.write_memories)
+
+
+def test_write_memories_never_raises():
+    """Memory must never break a conversation."""
+    from vital.graph import write_memories
+
+    class Boom:
+        def with_structured_output(self, _s):
+            raise RuntimeError("model down")
+
+    assert write_memories("u1", [], llm=Boom()) == 0          # empty tail
+    from langchain_core.messages import AIMessage
+    assert write_memories("u1", [AIMessage(content="hi")], store=object(),
+                          llm=Boom()) == 0                     # extraction fails

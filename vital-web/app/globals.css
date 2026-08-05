@@ -558,6 +558,10 @@ button.ghost-danger:hover { border-color: var(--danger); }
 [data-theme="light"] .send { color: #fff; }
 .send:hover { filter: brightness(1.08); }
 .send:disabled { opacity: 0.4; }
+/* Stop button: same slot as send while a turn is streaming. Muted rather
+   than accent-coloured — it's an escape hatch, not the primary action. */
+.send.stop { background: var(--muted); display: grid; place-items: center; }
+.send.stop svg { width: 15px; height: 15px; }
 .composer-hint { text-align: center; color: var(--muted); font-size: 11.5px; margin-top: 8px; }
 
 /* voice input */

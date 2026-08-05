@@ -391,3 +391,89 @@ def test_debug_routes_exist_and_require_token_when_enabled(monkeypatch):
     monkeypatch.setenv("API_AUTH_TOKEN", "")
     settings.cache_clear()
     importlib.reload(api)
+
+
+# ---------- P1-12: preview-origin CORS allowlist ----------
+
+def test_preview_regex_must_be_anchored(monkeypatch):
+    """Unanchored is the classic CORS footgun: 'vercel\\.app' also matches
+    https://evil.com/?x=vercel.app. With allow_credentials=True that is an
+    account-takeover primitive, so refuse to boot."""
+    from vital import security
+    from vital.config import settings
+
+    monkeypatch.setenv("PREVIEW_ORIGIN_REGEX", r"vital-agent-.*\.vercel\.app")
+    settings.cache_clear()
+    with pytest.raises(RuntimeError, match="anchored"):
+        security.validate_startup()
+    settings.cache_clear()
+
+
+def test_preview_regex_rejects_wildcards(monkeypatch):
+    from vital import security
+    from vital.config import settings
+
+    monkeypatch.setenv("PREVIEW_ORIGIN_REGEX", r"^https://.*\.vercel\.app$")
+    settings.cache_clear()
+    with pytest.raises(RuntimeError, match="too broad"):
+        security.validate_startup()
+    settings.cache_clear()
+
+
+def test_preview_regex_rejects_invalid_pattern(monkeypatch):
+    from vital import security
+    from vital.config import settings
+
+    monkeypatch.setenv("PREVIEW_ORIGIN_REGEX", "^https://[unclosed$")
+    settings.cache_clear()
+    with pytest.raises(RuntimeError, match="valid regex"):
+        security.validate_startup()
+    settings.cache_clear()
+
+
+def test_a_tight_anchored_preview_regex_is_accepted(monkeypatch):
+    from vital import security
+    from vital.config import settings
+
+    monkeypatch.setenv("PREVIEW_ORIGIN_REGEX",
+                       r"^https://vital-agent-git-[a-z0-9-]+-acme\.vercel\.app$")
+    settings.cache_clear()
+    security.validate_startup()      # must not raise
+    settings.cache_clear()
+
+
+def test_no_preview_regex_configured_is_fine(monkeypatch):
+    """Opt-in: the default stays single-origin."""
+    from vital import security
+    from vital.config import settings
+
+    monkeypatch.setenv("PREVIEW_ORIGIN_REGEX", "")
+    settings.cache_clear()
+    security.validate_startup()
+    settings.cache_clear()
+
+
+# ---------- P1-9: single-request identity bootstrap ----------
+
+def test_session_bootstrap_sets_one_session_and_reuses_it(monkeypatch):
+    from vital import security
+    client, _fake = _client(monkeypatch)
+
+    first = client.get("/session")
+    assert first.status_code == 200 and first.json() == {"ready": True}
+    session = client.cookies[security.SESSION_COOKIE]
+    assert session
+
+    # subsequent calls must NOT rotate the identity out from under the client
+    client.get("/session")
+    client.get("/memories")
+    assert client.cookies[security.SESSION_COOKIE] == session
+
+
+def test_session_bootstrap_leaks_no_identity():
+    """The session travels in the cookie; the body must stay opaque."""
+    import inspect
+    from vital import api
+    body = inspect.getsource(api.session_bootstrap)
+    assert '{"ready": True}' in body
+    assert "user_id" not in body.split('"""')[-1]

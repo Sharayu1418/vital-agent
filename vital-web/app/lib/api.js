@@ -48,13 +48,44 @@ export async function request(path, options = {}, retried = false) {
   return res;
 }
 
+/* P1-9: identity must exist before anything fans out.
+ *
+ * Every identity-resolving endpoint can mint a new anonymous session, so
+ * three parallel calls could each mint a DIFFERENT one — last cookie wins,
+ * and data written under the losers is orphaned. This resolves identity in
+ * a single request first.
+ *
+ * Memoized on the PROMISE, not on a boolean: concurrent callers must await
+ * the same in-flight request rather than each firing their own, which would
+ * recreate the exact race. resetSession() clears it on sign-out/switch so
+ * the next identity bootstraps cleanly. */
+let sessionReady = null;
+
+export function bootstrapSession() {
+  if (!sessionReady) {
+    // a failed bootstrap must not be cached, or the app never retries
+    sessionReady = request("/session").catch((err) => {
+      sessionReady = null;
+      throw err;
+    });
+  }
+  return sessionReady;
+}
+
+export function resetSession() {
+  sessionReady = null;
+}
+
 export const api = {
-  chat: (message, threadId) =>
-    request("/chat", { method: "POST", headers: json,
+  // `signal` lets the caller cancel a stream (stop button, thread switch).
+  // Without it an abandoned turn kept streaming to completion in the
+  // background, burning tokens for output nobody would ever see.
+  chat: (message, threadId, signal) =>
+    request("/chat", { method: "POST", headers: json, signal,
       body: JSON.stringify({ message, thread_id: threadId }) }),
 
-  approve: (action, feedback, threadId) =>
-    request("/approve", { method: "POST", headers: json,
+  approve: (action, feedback, threadId, signal) =>
+    request("/approve", { method: "POST", headers: json, signal,
       body: JSON.stringify({ action, feedback, thread_id: threadId }) }),
 
   upload: (file) => {

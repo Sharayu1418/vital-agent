@@ -96,3 +96,89 @@ def test_csv_preview_caps_rows():
     ingest.save_sleep_data("u1", rows)
     preview = ingest.csv_preview(ingest.sleep_csv_bytes("u1"), rows=3)
     assert len(preview.splitlines()) == 4       # header + 3 data rows
+
+
+# ---------- P0-2 / P0-3: streaming + zip ----------
+
+def test_streaming_parser_matches_the_bytes_parser():
+    import io
+    from vital import ingest as ing
+    assert ing.parse_apple_health_stream(io.BytesIO(APPLE_XML)) == \
+        ing.parse_apple_health_xml(APPLE_XML)
+
+
+def test_streaming_parser_survives_a_malformed_record():
+    """A multi-year export must not be sunk by one bad row."""
+    import io
+    from vital import ingest as ing
+    broken = APPLE_XML.replace(
+        b'<Record type="HKQuantityTypeIdentifierStepCount" value="9000"',
+        b'<Record type="HKCategoryTypeIdentifierSleepAnalysis"\n'
+        b'         value="HKCategoryValueSleepAnalysisAsleepCore"\n'
+        b'         startDate="not-a-date" endDate="also-not-a-date"/>\n'
+        b'      <Record type="HKQuantityTypeIdentifierStepCount" value="9000"')
+    rows = ing.parse_apple_health_stream(io.BytesIO(broken))
+    assert rows[0]["duration_min"] == 420   # the good records still totalled
+
+
+def test_streaming_parser_does_not_retain_records():
+    """Regression guard for the OOM. iterparse only helps if each element is
+    cleared AND unhooked from the root; otherwise the parser silently keeps
+    every sibling and peak memory is still O(filesize). Feed many records and
+    assert the tree we hold at the end is empty."""
+    import io
+    from vital import ingest as ing
+
+    from datetime import date, timedelta
+    day0 = date(2024, 1, 1)
+    body = b"".join(
+        (f'<Record type="HKCategoryTypeIdentifierSleepAnalysis" '
+         f'value="HKCategoryValueSleepAnalysisAsleepCore" '
+         f'startDate="{day0 + timedelta(days=i)} 22:00:00 -0400" '
+         f'endDate="{day0 + timedelta(days=i + 1)} 06:00:00 -0400"/>').encode()
+        for i in range(3000))   # distinct nights, so none trip the 18h filter
+    big = b'<?xml version="1.0"?><HealthData>' + body + b"</HealthData>"
+
+    seen_roots = []
+    real_iterparse = ing.ET.iterparse
+
+    def spy(source, events=None):
+        for ev, el in real_iterparse(source, events=events):
+            if ev == "start" and not seen_roots:
+                seen_roots.append(el)
+            yield ev, el
+
+    ing.ET.iterparse = spy
+    try:
+        rows = ing.parse_apple_health_stream(io.BytesIO(big))
+    finally:
+        ing.ET.iterparse = real_iterparse
+
+    assert rows                       # parsing still worked
+    assert len(seen_roots[0]) == 0    # root holds no accumulated children
+
+
+def test_zip_upload_reads_the_export_member():
+    import io
+    import zipfile
+    from vital import ingest as ing
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("apple_health_export/export.xml", APPLE_XML)
+    buf.seek(0)
+    assert ing.parse_apple_health_zip(buf) == ing.parse_apple_health_xml(APPLE_XML)
+
+
+def test_zip_without_an_export_is_a_clear_error():
+    import io
+    import zipfile
+    import pytest as _pytest
+    from vital import ingest as ing
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("holiday-photos/beach.jpg", b"not xml")
+    buf.seek(0)
+    with _pytest.raises(ValueError, match="export.xml"):
+        ing.parse_apple_health_zip(buf)
