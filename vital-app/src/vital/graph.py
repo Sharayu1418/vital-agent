@@ -42,6 +42,25 @@ async def close_graph_resources():
     await _ASYNC_CHECKPOINTER_STACK.aclose()
 
 
+def trim_history(messages, limit: int | None = None) -> list:
+    """The most recent slice of a conversation (P1-6).
+
+    Every turn used to resend the ENTIRE thread. Cost and latency grew
+    linearly with thread length, and a long enough conversation would
+    eventually exceed the context window and fail mid-chat with no recovery
+    path — the user having no idea they were supposed to start a new one.
+
+    Durable facts already survive in long-term memory, which is injected
+    separately, so old turns are the cheapest thing to drop. Kept as a pure
+    function so the boundary behaviour is testable without a graph.
+    """
+    limit = limit or settings().history_limit
+    messages = list(messages)
+    if len(messages) <= limit:
+        return messages
+    return messages[-limit:]
+
+
 def _agent_node(agent, store):
     """Wrap a compiled ReAct agent as a node, with memory injection.
 
@@ -53,7 +72,7 @@ def _agent_node(agent, store):
     agents concatenated into a single bubble with no separator.
     """
     def node(state: VitalState) -> Command:
-        messages = list(state["messages"])
+        messages = trim_history(state["messages"])
         last_user = next((m.content for m in reversed(messages)
                           if getattr(m, "type", "") == "human"), "")
         facts = memory.recall(store, state["user_id"], str(last_user))

@@ -104,3 +104,39 @@ def test_write_memories_never_raises():
     from langchain_core.messages import AIMessage
     assert write_memories("u1", [AIMessage(content="hi")], store=object(),
                           llm=Boom()) == 0                     # extraction fails
+
+
+# ---------- P1-6: conversation history is bounded ----------
+
+def test_short_conversations_are_untouched():
+    from vital.graph import trim_history
+    msgs = [("user", "hi"), ("ai", "hello")]
+    assert trim_history(msgs) == msgs
+
+
+def test_long_conversations_are_trimmed_to_the_recent_slice():
+    """Every turn used to resend the whole thread — cost and latency grew
+    linearly, and a long enough conversation would exceed the context window
+    and fail mid-chat."""
+    from vital.graph import trim_history
+    msgs = [("user", f"m{i}") for i in range(100)]
+    kept = trim_history(msgs, limit=20)
+    assert len(kept) == 20
+    assert kept[-1] == ("user", "m99"), "must keep the MOST RECENT turns"
+    assert kept[0] == ("user", "m80")
+
+
+def test_trim_keeps_the_latest_user_message():
+    """The agent reads the last human message to build its memory query; if
+    trimming dropped it, recall would silently query the wrong thing."""
+    from vital.graph import trim_history
+    msgs = [("ai", f"a{i}") for i in range(50)] + [("user", "what should I do today?")]
+    kept = trim_history(msgs, limit=5)
+    assert kept[-1] == ("user", "what should I do today?")
+
+
+def test_the_limit_is_configurable():
+    from vital.config import settings
+    from vital.graph import trim_history
+    msgs = [("user", f"m{i}") for i in range(100)]
+    assert len(trim_history(msgs)) == settings().history_limit

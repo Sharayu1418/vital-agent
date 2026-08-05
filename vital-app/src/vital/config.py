@@ -59,6 +59,24 @@ class Settings(BaseSettings):
     # uploaded health data lives in the shared relational store (storage.py);
     # container disk is ephemeral on Cloud Run, so no DATA_DIR anymore
     memory_recall_limit: int = 5
+    # P1-6: messages sent to an agent per turn. The whole thread used to go
+    # every time, so cost and latency grew with conversation length and a
+    # long enough thread would eventually blow the context window mid-chat.
+    # Durable facts live in long-term memory and are injected separately, so
+    # older turns are the cheapest thing to drop.
+    history_limit: int = 20
+
+    # --- Semantic memory (pgvector via LangGraph's store index) ---
+    # Retrieval and dedup were keyword-based and both failed the same way:
+    # "User is in Albany", "User is located in or near Albany" and "User is
+    # located in Albany/Guilderland" are three rows for one fact, and
+    # "ceramics" never retrieved a stored "pottery" fact.
+    embedding_model: str = "text-embedding-004"
+    embedding_dims: int = 768          # text-embedding-004 output size
+    # Cosine similarity above which a new fact OVERWRITES an existing one
+    # rather than being stored alongside it. Tuned against the real Albany
+    # duplicates — see tests/test_memory_semantic.py.
+    memory_dedup_threshold: float = 0.82
 
     # --- Phase 3: events provider (free key: developer.ticketmaster.com) ---
     ticketmaster_api_key: str | None = None

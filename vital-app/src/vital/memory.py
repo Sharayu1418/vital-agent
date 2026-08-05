@@ -9,12 +9,20 @@ Principles (from phase doc):
   junk, so we'd rather miss a fact than store noise.
 
 Store backend: InMemoryStore locally; PostgresStore when DATABASE_URL is
-set (same swap pattern as the checkpointer). Retrieval is keyword-overlap
-for now — pgvector semantic search is the Phase-4/5 upgrade, behind this
-same interface.
+set (same swap pattern as the checkpointer). Both are configured with a
+vector index, so retrieval and dedup are SEMANTIC.
+
+Why: the previous implementation compared words. Retrieval ranked by raw
+word overlap, so "ceramics" never found a stored "pottery" fact, and every
+fact starting with "User " matched everything. Dedup used a difflib ratio,
+which reads "User is in Albany" and "User is located in or near Albany" as
+different strings — production accumulated four rows for one fact.
+
+LangGraph's store does the vector work (pgvector under PostgresStore), so
+there is no bespoke schema here: an IndexConfig, and search(query=...)
+becomes a similarity search.
 """
 import atexit
-import difflib
 import uuid
 from contextlib import ExitStack
 from functools import lru_cache
@@ -24,7 +32,6 @@ from pydantic import BaseModel, Field
 from vital.config import settings
 
 NAMESPACE_SUFFIX = "profile"
-SIMILARITY_OVERWRITE = 0.8
 CONFIDENCE_FLOOR = 0.6
 
 _RESOURCE_STACK = ExitStack()
@@ -54,64 +61,107 @@ class FactList(BaseModel):
     facts: list[Fact]
 
 
+def _embeddings():
+    """The real embedding model. Isolated so tests patch THIS and never the
+    network — same seam pattern as security._firebase_verify and the crisis
+    classifier."""
+    from langchain_google_vertexai import VertexAIEmbeddings
+
+    cfg = settings()
+    return VertexAIEmbeddings(model_name=cfg.embedding_model,
+                              project=cfg.google_cloud_project,
+                              location=cfg.google_cloud_location)
+
+
+def index_config() -> dict:
+    """Vector index for the store. `fields` limits embedding to the fact
+    text — embedding the confidence number too would just add noise."""
+    cfg = settings()
+    return {"dims": cfg.embedding_dims, "embed": _embeddings(),
+            "fields": ["fact"]}
+
+
 @lru_cache
 def get_store():
     cfg = settings()
     if cfg.database_url:
         from langgraph.store.postgres import PostgresStore
         store = _RESOURCE_STACK.enter_context(
-            PostgresStore.from_conn_string(cfg.database_url)
+            PostgresStore.from_conn_string(cfg.database_url,
+                                           index=index_config())
         )
+        # Creates the vector extension and tables. Needs the DB user to have
+        # rights to CREATE EXTENSION; if the deploy fails at startup, run
+        # `CREATE EXTENSION IF NOT EXISTS vector;` by hand once.
         store.setup()
         return store
     from langgraph.store.memory import InMemoryStore
-    return InMemoryStore()
+    return InMemoryStore(index=index_config())
 
 
 def _ns(user_id: str) -> tuple:
     return (user_id, NAMESPACE_SUFFIX)
 
 
+def duplicate_key(store, user_id: str, fact: str) -> str | None:
+    """Key of an existing fact this one should REPLACE, or None.
+
+    Semantic, not textual. difflib read "User is in Albany" and "User is
+    located in or near Albany" as different strings and production ended up
+    with four rows for one fact.
+    """
+    hits = store.search(_ns(user_id), query=fact, limit=1)
+    if not hits:
+        return None
+    top = hits[0]
+    score = getattr(top, "score", None)
+    if score is not None and score >= settings().memory_dedup_threshold:
+        return top.key
+    return None
+
+
 def remember(store, user_id: str, transcript: str, llm) -> int:
-    """Extract facts and store them, deduplicating. Returns #stored."""
+    """Extract facts and store them, deduplicating. Returns #stored.
+
+    An embedding failure skips the WRITE and leaves the conversation alone —
+    memory must never break a turn. The miss surfaces through tool-health
+    logging rather than the user.
+    """
     result: FactList = llm.with_structured_output(FactList).invoke(
         EXTRACT_PROMPT.format(transcript=transcript))
-    existing = {item.key: item.value["fact"] for item in store.search(_ns(user_id))}
 
     stored = 0
     for fact in result.facts:
         if fact.confidence < CONFIDENCE_FLOOR:
             continue
-        # near-duplicate? overwrite that key instead of adding a sibling
-        target_key = None
-        for key, old in existing.items():
-            ratio = difflib.SequenceMatcher(None, fact.fact.lower(), old.lower()).ratio()
-            if ratio >= SIMILARITY_OVERWRITE:
-                target_key = key
-                break
-        key = target_key or uuid.uuid4().hex
-        store.put(_ns(user_id), key, {"fact": fact.fact, "confidence": fact.confidence})
-        existing[key] = fact.fact
+        try:
+            key = duplicate_key(store, user_id, fact.fact) or uuid.uuid4().hex
+            store.put(_ns(user_id), key,
+                      {"fact": fact.fact, "confidence": fact.confidence})
+        except Exception:
+            # embedding/store failure: one fact goes unsaved, the turn is
+            # untouched. Deliberately not a partial write — storing without
+            # a vector would create a memory the agent can never retrieve.
+            continue
         stored += 1
     return stored
 
 
 def recall(store, user_id: str, query: str, limit: int | None = None) -> list[str]:
-    """Keyword-overlap retrieval. Facts sharing words with the query rank
-    first; with no overlap at all we return the most confident facts, since
-    a handful of good profile facts is almost always relevant context."""
+    """Semantic retrieval: facts closest in meaning to what the user just
+    said. Word overlap could not do this — every fact begins with "User ",
+    stopwords matched everything, and "ceramics" never found "pottery".
+
+    Falls back to an unranked read if the vector search fails, because a
+    few profile facts are better context than none.
+    """
     limit = limit or settings().memory_recall_limit
-    items = list(store.search(_ns(user_id)))
-    if not items:
-        return []
-    q_words = set(query.lower().split())
-
-    def score(item):
-        f_words = set(item.value["fact"].lower().split())
-        return (len(q_words & f_words), item.value.get("confidence", 0))
-
-    ranked = sorted(items, key=score, reverse=True)
-    return [i.value["fact"] for i in ranked[:limit]]
+    try:
+        hits = store.search(_ns(user_id), query=query, limit=limit)
+        return [h.value["fact"] for h in hits]
+    except Exception:
+        items = list(store.search(_ns(user_id)))[:limit]
+        return [i.value["fact"] for i in items]
 
 
 def all_memories(store, user_id: str) -> list[dict]:

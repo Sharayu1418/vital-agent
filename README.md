@@ -335,7 +335,7 @@ The web app sends a Firebase ID token with authenticated API requests. The backe
 
 VITAL is an actively developed product. Current technical boundaries include:
 
-- Long-term memory retrieval uses keyword overlap rather than vector search.
+- Memory retrieval and dedup are semantic (pgvector via LangGraph's store index); the similarity threshold is validated against real cases in `tests/test_memory_live.py`.
 - Approved plans commit to VITAL's relational calendar, not Google Calendar.
 - Community discovery has no third-party provider by design — Reddit, Meetup, Facebook Groups, Eventbrite search and Strava clubs have all closed or gone paid since 2019. It runs on Google Places and the Activity Buddy Board instead; see [docs/LIMITATIONS.md](docs/LIMITATIONS.md).
 - Conversation history is not trimmed, so long threads grow in cost and latency.

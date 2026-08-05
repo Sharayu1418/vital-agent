@@ -95,13 +95,19 @@ distinction the data doesn't support.
 
 ## Other current boundaries
 
-- Long-term memory retrieval uses keyword overlap rather than vector
-  search, and near-duplicate facts survive the difflib threshold
-  ("User is in Albany" / "User is located in or near Albany").
 - Approved plans commit to VITAL's relational calendar, not Google
   Calendar.
-- Conversation history is not trimmed or summarised, so long threads grow
-  in cost and latency and will eventually exceed the context window.
+- Conversation history is trimmed to the most recent turns
+  (`HISTORY_LIMIT`) but not *summarised*, so a very long thread loses early
+  context rather than compressing it. Durable facts survive in long-term
+  memory, which is injected separately.
+- Memory dedup and recall are semantic, but the threshold
+  (`MEMORY_DEDUP_THRESHOLD`, 0.82) is tuned against a small set of real
+  cases in `tests/test_memory_live.py`. Too high and duplicates return; too
+  low and distinct memories get merged, which is the worse failure. Re-run
+  that eval before changing it.
+- Every memory write and recall now costs an embedding call. Small, but on
+  the hot path.
 - Health uploads stream and are memory-safe, but Cloud Run caps HTTP/1.1
   request bodies at 32MB. Larger Apple Health exports need a signed-URL
   upload to GCS; `--use-http2` is **not** a workaround, because uvicorn
