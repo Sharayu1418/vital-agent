@@ -63,6 +63,19 @@ class Settings(BaseSettings):
     # --- Phase 3: events provider (free key: developer.ticketmaster.com) ---
     ticketmaster_api_key: str | None = None
 
+    # --- Reddit (community search) ---
+    # The keyless www.reddit.com JSON endpoint works from a laptop but Reddit
+    # blocks datacenter IPs, so on Cloud Run it failed EVERY time and the
+    # People Connector's community half was silently dead in production.
+    # App-only OAuth (client credentials) fixes that. Create an app of type
+    # "script" at https://www.reddit.com/prefs/apps — no user account is
+    # involved, we only read public subreddit listings.
+    # Unset -> fall back to the keyless endpoint, which is still fine locally.
+    reddit_client_id: str | None = None
+    reddit_client_secret: str | None = None
+    # Reddit asks for a descriptive UA and rate-limits generic ones harder.
+    reddit_user_agent: str = "vital-app/0.5 (wellness copilot; community search)"
+
     # --- Phase 4: guardrails ---
     daily_token_budget: int = 50_000   # per user; ~$0.05/day at Flash prices
     # Hard ceiling on the crisis screen's model call. Past this we stop
