@@ -86,6 +86,14 @@ CREATE TABLE IF NOT EXISTS health_sleep (
     duration_min INTEGER NOT NULL, quality TEXT, source TEXT,
     PRIMARY KEY (user_id, date)
 );
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+    user_id TEXT NOT NULL, provider TEXT NOT NULL,
+    refresh_token TEXT NOT NULL,        -- ENCRYPTED, never plaintext
+    access_token TEXT, access_expires_at TEXT,
+    scopes TEXT, connected_at TEXT NOT NULL,
+    last_sync_at TEXT, last_error TEXT,
+    PRIMARY KEY (user_id, provider)
+);
 CREATE TABLE IF NOT EXISTS interests (
     user_id TEXT, interest TEXT, PRIMARY KEY (user_id, interest)
 );
@@ -428,6 +436,126 @@ def save_health_rows(user_id: str, rows: list[dict]) -> int:
               str(r.get("quality") or ""), str(r.get("source") or "upload"))
              for r in rows])
     return len(rows)
+
+
+# ---------- linked wearable accounts (OAuth) ----------
+#
+# Refresh tokens are stored ENCRYPTED (secrets.py). Nothing in this module
+# ever returns one in the clear except get_refresh_token, which exists so
+# the provider layer can mint an access token and is the single place a
+# plaintext credential appears.
+
+def save_connection(user_id: str, provider: str, refresh_token: str,
+                    scopes: str = "") -> None:
+    from datetime import datetime, timezone
+
+    from vital import secrets
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as c:
+        c.execute(
+            """INSERT INTO oauth_tokens
+                 (user_id, provider, refresh_token, access_token,
+                  access_expires_at, scopes, connected_at, last_sync_at,
+                  last_error)
+               VALUES (?, ?, ?, NULL, NULL, ?, ?, NULL, NULL)
+               ON CONFLICT (user_id, provider) DO UPDATE SET
+                 refresh_token = excluded.refresh_token,
+                 scopes = excluded.scopes,
+                 connected_at = excluded.connected_at,
+                 access_token = NULL, access_expires_at = NULL,
+                 last_error = NULL""",
+            (user_id, provider, secrets.encrypt(refresh_token), scopes, now))
+
+
+def get_connection(user_id: str, provider: str) -> dict | None:
+    """Connection metadata WITHOUT the refresh token.
+
+    Deliberately separate from get_refresh_token: the status endpoint, the
+    panel and the logs all want to know whether a connection exists and
+    when it last worked, and none of them should be handling a credential
+    to find out.
+    """
+    with _conn() as c:
+        row = c.execute(
+            """SELECT user_id, provider, access_token, access_expires_at,
+                      scopes, connected_at, last_sync_at, last_error
+                 FROM oauth_tokens WHERE user_id = ? AND provider = ?""",
+            (user_id, provider)).fetchone()
+    return dict(row) if row else None
+
+
+def get_refresh_token(user_id: str, provider: str) -> str | None:
+    from vital import secrets
+    with _conn() as c:
+        row = c.execute(
+            "SELECT refresh_token FROM oauth_tokens WHERE user_id = ? AND provider = ?",
+            (user_id, provider)).fetchone()
+    if not row:
+        return None
+    return secrets.decrypt(dict(row)["refresh_token"])
+
+
+def cache_access_token(user_id: str, provider: str, token: str,
+                       expires_at: str) -> None:
+    """Access tokens are short-lived (about an hour) but still credentials,
+    so they are encrypted too rather than treated as harmless."""
+    from vital import secrets
+    with _conn() as c:
+        c.execute(
+            """UPDATE oauth_tokens SET access_token = ?, access_expires_at = ?
+                 WHERE user_id = ? AND provider = ?""",
+            (secrets.encrypt(token), expires_at, user_id, provider))
+
+
+def get_cached_access_token(user_id: str, provider: str) -> tuple[str, str] | None:
+    from vital import secrets
+    row = get_connection(user_id, provider)
+    if not row or not row.get("access_token"):
+        return None
+    try:
+        return secrets.decrypt(row["access_token"]), row["access_expires_at"]
+    except Exception:
+        return None          # unreadable cache is a miss, not an error
+
+
+def mark_sync(user_id: str, provider: str, error: str | None = None) -> None:
+    """Record the outcome of every sync attempt.
+
+    In Testing publishing status Google's refresh tokens expire after 7
+    days, so this WILL start failing on a schedule. The panel reads
+    last_error to say 'reconnect' — a dead sync that only shows up in logs
+    is the failure mode this codebase already learned the hard way.
+    """
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as c:
+        if error:
+            c.execute("UPDATE oauth_tokens SET last_error = ? "
+                      "WHERE user_id = ? AND provider = ?",
+                      (error[:300], user_id, provider))
+        else:
+            c.execute("UPDATE oauth_tokens SET last_sync_at = ?, last_error = NULL "
+                      "WHERE user_id = ? AND provider = ?", (now, user_id, provider))
+
+
+def delete_connection(user_id: str, provider: str) -> None:
+    with _conn() as c:
+        c.execute("DELETE FROM oauth_tokens WHERE user_id = ? AND provider = ?",
+                  (user_id, provider))
+
+
+def delete_synced_health_data(user_id: str, source: str) -> int:
+    """Erase everything one provider ever wrote.
+
+    Required by Google's user data policy and checked at CASA: disconnect
+    has to be able to actually remove the data, not just drop the token.
+    Scoped by source so a disconnect never touches the user's manual logs
+    or their own uploaded export.
+    """
+    with _conn() as c:
+        cur = c.execute("DELETE FROM health_sleep WHERE user_id = ? AND source = ?",
+                        (user_id, source))
+        return cur.rowcount or 0
 
 
 def health_rows(user_id: str) -> list[dict]:

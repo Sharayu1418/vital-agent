@@ -40,6 +40,7 @@ export default function Home() {
   const [events, setEvents] = useState([]);
   const [memories, setMemories] = useState([]);
   const [forecast, setForecast] = useState(null);
+  const [connections, setConnections] = useState([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [daylightLocation, setDaylightLocation] = useState(null);
@@ -288,8 +289,9 @@ export default function Home() {
       // endpoint rejected the whole batch and the catch below silently
       // blanked the entire panel — sleep, calendar and memories together.
       // Each section should survive its neighbours failing.
-      const [s, c, m, f] = await Promise.allSettled([
+      const [s, c, m, f, d] = await Promise.allSettled([
         api.sleepRecent(), api.calendar(), api.memories(), api.forecast(24),
+        api.connections(),
       ]);
       const ok = (r) => (r.status === "fulfilled" && r.value.ok ? r.value : null);
       const read = async (r, pick) => {
@@ -305,6 +307,7 @@ export default function Home() {
       const eventsBody = await read(c, (b) => b.events);
       const memoriesBody = await read(m, (b) => b.memories);
       const forecastBody = await read(f, (b) => b);
+      const connectionsBody = await read(d, (b) => b.connections);
       if (!live()) return;
       // a working authenticated request proves we're not stuck — retire any
       // lingering "sign in again" notice (keeps the reauth prompt non-sticky)
@@ -313,6 +316,7 @@ export default function Home() {
       if (eventsBody) setEvents(eventsBody);
       if (memoriesBody) setMemories(memoriesBody);
       if (forecastBody) setForecast(forecastBody);
+      if (connectionsBody) setConnections(connectionsBody);
     } catch { /* panel is decorative; chat still works */ }
   }, []);
 
@@ -602,6 +606,7 @@ export default function Home() {
         onSelect={selectThread} onNew={createThread} onDelete={deleteThread}
         open={sidebarOpen} onClose={() => setSidebarOpen(false)}
         memories={memories} onForget={forget} forecast={forecast}
+        connections={connections} onConnectionChanged={loadPanel}
         authReady={authReady} authUser={authUser} authBusy={authBusy}
         onSignIn={signIn} onSignOut={signOut} />
 

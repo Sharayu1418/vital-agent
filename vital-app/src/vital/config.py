@@ -105,6 +105,27 @@ class Settings(BaseSettings):
     # --- Phase 3: events provider (free key: developer.ticketmaster.com) ---
     ticketmaster_api_key: str | None = None
 
+    # --- Wearable sync: Google Health API (formerly the Fitbit Web API) ---
+    # The Fitbit Web API is decommissioned in September 2026 and no OAuth
+    # token carries over, so there is no version of this that builds on it.
+    #
+    # The client ID is public by design (it ships in a redirect URL). The
+    # SECRET must come from Secret Manager, never from Vercel or a NEXT_
+    # PUBLIC_ variable.
+    google_health_client_id: str | None = None
+    google_health_client_secret: str | None = None
+    # Where Google sends the user back. Must match the Authorized redirect
+    # URI on the OAuth client exactly, including scheme and trailing path.
+    google_health_redirect_uri: str | None = None
+    # Fernet key protecting stored refresh tokens (see secrets.py). Without
+    # it the connect route refuses rather than storing bearer credentials to
+    # a third party's health data in plaintext.
+    token_encryption_key: str | None = None
+    # How stale synced sleep data may be before /forecast refreshes it.
+    # Wearables post last night's sleep once, in the morning; polling harder
+    # spends rate limit for nothing.
+    sync_max_age_minutes: int = 180
+
     # NOTE: there is deliberately no community-search provider here. Every
     # third-party community API closed between 2019 and 2026 (Reddit,
     # Meetup, Facebook Groups, Eventbrite search, Strava clubs). Community

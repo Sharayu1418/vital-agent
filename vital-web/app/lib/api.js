@@ -111,6 +111,13 @@ export const api = {
 
   sleepRecent: () => request("/sleep/recent"),
   forecast: (hours = 24) => request(`/forecast?horizon_hours=${hours}`),
+
+  // ---- wearable connections ----
+  connections: () => request("/connections"),
+  connectStart: (provider) => request(`/connect/${provider}`),
+  connectSync: (provider) => request(`/connect/${provider}/sync`, { method: "POST" }),
+  connectDisconnect: (provider) =>
+    request(`/connect/${provider}`, { method: "DELETE" }),
   calendar: () => request("/calendar"),
   memories: () => request("/memories"),
   forget: (key) => request(`/memories/${key}`, { method: "DELETE" }),

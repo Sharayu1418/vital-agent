@@ -684,6 +684,12 @@ def energy_forecast(response: Response, horizon_hours: int = 24,
     current_user_id.set(user_id)     # nights_from_rows reads the contextvar
     _set_session(response, new_session)
 
+    # Refresh from a linked wearable if the data is stale. Best effort by
+    # design: a provider outage must degrade the forecast's freshness, not
+    # break the panel.
+    from vital import sync as sync_mod
+    sync_mod.sync_if_stale(user_id)
+
     nights = engine.nights_from_rows(
         storage.sleep_history(engine.DEBT_WINDOW_NIGHTS * 2),
         storage.health_rows(user_id))
@@ -694,6 +700,142 @@ def energy_forecast(response: Response, horizon_hours: int = 24,
                          "hours_awake": p.hours_awake, "energy": p.energy}
                         for p in result.waking_points()]
     return payload
+
+
+# ---------- wearable connections (Google Health / Fitbit) ----------
+#
+# Same rule as commit_plan: identity is NEVER taken from the request. The
+# callback derives the user from the session that started the flow, so a
+# code delivered to somebody else's browser cannot link an attacker's
+# Fitbit account to their VITAL account.
+
+@app.get("/connections")
+def connections(response: Response, ident: Identity = Depends()) -> dict:
+    """Connection status for the panel. No network calls."""
+    from vital import sync as sync_mod
+
+    user_id, new_session = ident.resolve()
+    _set_session(response, new_session)
+    return {"connections": [sync_mod.status(user_id)]}
+
+
+@app.get("/connect/{provider_name}")
+def connect_start(provider_name: str, response: Response,
+                  ident: Identity = Depends()) -> dict:
+    """Begin the OAuth flow. Returns the consent URL for the client to open.
+
+    Returns a URL rather than issuing a redirect: the frontend is on a
+    different origin, and a 302 out of a fetch() would be followed opaquely
+    with no way to attach the session.
+    """
+    from vital import oauth_state, providers, secrets as token_secrets
+
+    user_id, new_session = ident.resolve()
+    _set_session(response, new_session)
+
+    try:
+        provider = providers.get_provider(provider_name)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="unknown provider")
+    if not provider.configured():
+        raise HTTPException(status_code=503,
+                            detail=f"{provider.label} is not configured")
+    # Refuse BEFORE consent rather than after. Walking someone through a
+    # Google consent screen and then failing to persist the result is a
+    # worse experience than saying no up front.
+    if not token_secrets.available():
+        raise HTTPException(
+            status_code=503,
+            detail="token encryption is not configured on the server")
+
+    session_id = ident.session or new_session or user_id
+    state = oauth_state.issue(session_id, provider_name)
+    metrics.log_tool(user_id, f"sync:{provider_name}:connect_start", "ok")
+    return {"authorize_url": provider.authorize_url(state)}
+
+
+@app.get("/connect/{provider_name}/callback")
+def connect_callback(provider_name: str,
+                     code: str | None = None, state: str | None = None,
+                     error: str | None = None,
+                     ident: Identity = Depends()):
+    """Where Google sends the user back.
+
+    Always redirects to the app rather than rendering JSON — a human is
+    looking at this, not a script.
+    """
+    from fastapi.responses import RedirectResponse
+
+    from vital import oauth_state, providers
+    from vital.providers.base import ProviderError
+
+    app_url = settings().frontend_origin
+
+    def back(status: str, detail: str = "") -> RedirectResponse:
+        from urllib.parse import urlencode
+        query = urlencode({"connected": status, **({"detail": detail} if detail else {})})
+        return RedirectResponse(f"{app_url}/?{query}", status_code=303)
+
+    if error:
+        return back("denied", error[:120])
+    if not code:
+        return back("error", "no authorization code")
+
+    user_id, _ = ident.resolve()
+    session_id = ident.session or user_id
+    try:
+        oauth_state.verify(state or "", session_id, provider_name)
+    except Exception as exc:
+        # Do not reveal which check failed; it is a probing oracle.
+        metrics.log_tool(user_id, f"sync:{provider_name}:callback", "error",
+                         error=f"state rejected: {type(exc).__name__}")
+        return back("error", "this connection link is not valid any more")
+
+    try:
+        provider = providers.get_provider(provider_name)
+        refresh_token, scopes = provider.exchange_code(code)
+        storage.save_connection(user_id, provider_name, refresh_token, scopes)
+    except ProviderError as exc:
+        metrics.log_tool(user_id, f"sync:{provider_name}:callback", "error",
+                         error=str(exc))
+        return back("error", str(exc)[:120])
+    except Exception as exc:
+        metrics.log_tool(user_id, f"sync:{provider_name}:callback", "error",
+                         error=type(exc).__name__)
+        return back("error", "could not save the connection")
+
+    metrics.log_tool(user_id, f"sync:{provider_name}:callback", "ok")
+    return back("ok")
+
+
+@app.post("/connect/{provider_name}/sync")
+def connect_sync(provider_name: str, response: Response,
+                 ident: Identity = Depends()) -> dict:
+    """Manual 'Sync now'. Never raises — the result is the report."""
+    from vital import sync as sync_mod
+
+    user_id, new_session = ident.resolve()
+    _set_session(response, new_session)
+    result = sync_mod.sync(user_id, provider_name)
+    result["status"] = sync_mod.status(user_id, provider_name)
+    return result
+
+
+@app.delete("/connect/{provider_name}")
+def connect_disconnect(provider_name: str, response: Response,
+                       ident: Identity = Depends()) -> dict:
+    """Disconnect: revoke upstream, drop the token, delete synced nights.
+
+    All three. Deleting our row alone leaves the token live at the
+    provider, and keeping the data would fail the user-data policy the
+    CASA assessment checks. Manual logs and uploaded exports are untouched
+    because deletion is scoped by source.
+    """
+    from vital import sync as sync_mod
+
+    user_id, new_session = ident.resolve()
+    _set_session(response, new_session)
+    return sync_mod.disconnect(user_id, provider_name)
 
 
 @app.get("/calendar")

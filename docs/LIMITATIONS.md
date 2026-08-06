@@ -95,6 +95,26 @@ distinction the data doesn't support.
 
 ## Other current boundaries
 
+- Wearable sync covers Fitbit and Pixel Watch only, through the Google
+  Health API. **Apple Watch cannot be synced from a server at all** —
+  HealthKit data lives on the device, Apple runs no aggregation service,
+  and every route to it requires a native iOS app. Aggregators (Terra,
+  Thryve, Validic) do not avoid this; they hand you an iOS SDK to embed in
+  your own app. Until that app exists, Apple Watch data reaches VITAL only
+  through a manual Health export, which carries duration but no bedtimes,
+  so the forecast's timing stays a population default.
+
+  Oura, Whoop, Garmin, Withings and Polar all have usable cloud APIs and
+  would each be one adapter file behind `providers/base.py`. None are
+  built, deliberately: an integration for a device nobody here owns cannot
+  be verified end to end, and an unverifiable integration is how
+  `search_communities` stayed dead for months.
+
+  While the Google Cloud project is in **Testing** publishing status,
+  refresh tokens expire after 7 days, so sync breaks weekly by design and
+  the panel shows "Reconnect". Publishing needs OAuth verification plus an
+  annual third-party CASA security assessment ($500–$4,500, 2–6 weeks),
+  because every Google Health scope is Restricted.
 - Approved plans commit to VITAL's relational calendar, not Google
   Calendar.
 - Conversation history is trimmed to the most recent turns

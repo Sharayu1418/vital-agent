@@ -1,11 +1,12 @@
 "use client";
 import { accountLabel } from "../lib/auth";
+import DeviceConnection from "./DeviceConnection";
 import EnergyCurve from "./EnergyCurve";
 
 export default function Sidebar({
   threads, activeId, onSelect, onNew, onDelete, open, onClose,
-  memories, onForget, forecast, authReady, authUser, authBusy,
-  onSignIn, onSignOut,
+  memories, onForget, forecast, connections, onConnectionChanged,
+  authReady, authUser, authBusy, onSignIn, onSignOut,
 }) {
   return (
     <>
@@ -37,6 +38,11 @@ export default function Sidebar({
         </div>
 
         <EnergyCurve forecast={forecast} />
+
+        {connections?.map((c) => (
+          <DeviceConnection key={c.provider} connection={c}
+            onChanged={onConnectionChanged} />
+        ))}
 
         <section className="sidebar-memory" aria-labelledby="sidebar-memory-title">
           <div className="sidebar-memory-head">
