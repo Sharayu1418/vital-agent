@@ -32,7 +32,10 @@ function clockLabel(iso) {
 }
 
 export default function EnergyCurve({ forecast }) {
-  if (!forecast?.curve?.length) return null;
+  // Two points minimum. With one, every x is divided by (length - 1) = 0,
+  // which puts NaN into the SVG coordinates — a chart that silently draws
+  // nothing rather than an obvious failure.
+  if (!forecast?.curve || forecast.curve.length < 2) return null;
 
   const { curve, confidence, basis, peak, dip } = forecast;
   const line = pathFor(curve);

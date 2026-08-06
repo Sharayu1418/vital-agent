@@ -606,7 +606,7 @@ export default function Home() {
         onSelect={selectThread} onNew={createThread} onDelete={deleteThread}
         open={sidebarOpen} onClose={() => setSidebarOpen(false)}
         memories={memories} onForget={forget} forecast={forecast}
-        connections={connections} onConnectionChanged={loadPanel}
+        connections={connections} onConnectionChanged={refreshPanel}
         authReady={authReady} authUser={authUser} authBusy={authBusy}
         onSignIn={signIn} onSignOut={signOut} />
 
