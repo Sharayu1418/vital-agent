@@ -58,6 +58,54 @@ def analyze_sleep_data(question: str) -> dict:
         return {"error": f"analysis unavailable ({type(exc).__name__})"}
 
 
+@tool
+def forecast_energy(horizon_hours: int = 24) -> dict:
+    """Predict the user's energy over the next 24-72 hours.
+
+    Use this for ANY question about when to do something, when they'll be
+    sharp or flat, or how today will go. Returns a curve plus the peak and
+    dip windows in their local clock time, a confidence 0-1, and a `basis`
+    sentence describing what the prediction rests on.
+
+    ALWAYS quote the local times it gives you rather than restating a
+    generic rule, and if confidence is below 0.4 say plainly that this is a
+    typical pattern rather than theirs."""
+    from vital import forecast as engine
+    from vital import storage
+
+    nights = engine.nights_from_rows(
+        storage.sleep_history(engine.DEBT_WINDOW_NIGHTS * 2),
+        storage.health_rows(storage.current_user_id.get()))
+    result = engine.forecast(nights, storage.local_now(), horizon_hours)
+    return summarize(result)
+
+
+def summarize(result) -> dict:
+    """Flatten a Forecast into something a model can quote accurately.
+
+    Handing over 49 raw points invites the model to do arithmetic on them,
+    which it is bad at. The peak and dip are computed here, in the user's
+    clock, so the agent's job is quoting rather than deriving.
+    """
+    peak, trough = result.peak(), result.trough()
+    return {
+        "confidence": result.confidence,
+        "basis": result.basis,
+        "typical_wake": result.typical_wake.strftime("%H:%M"),
+        "typical_bedtime": result.typical_bedtime.strftime("%H:%M"),
+        "sleep_debt_hours": result.chronic_debt_h,
+        "last_night_deficit_hours": result.acute_deficit_h,
+        "peak": ({"at": peak.at.strftime("%a %H:%M"),
+                  "energy": peak.energy, "why": peak.drivers[:2]}
+                 if peak else None),
+        "dip": ({"at": trough.at.strftime("%a %H:%M"),
+                 "energy": trough.energy, "why": trough.drivers[:2]}
+                if trough else None),
+        "curve": [{"at": p.at.strftime("%a %H:%M"), "energy": p.energy}
+                  for p in result.waking_points()][::2],
+    }
+
+
 SYSTEM_PROMPT = """You are VITAL's Sleep & Energy agent. Be concrete and \
 actionable — never lecture about sleep hygiene generically.
 
@@ -71,10 +119,16 @@ When the user reports sleep or tiredness:
    anything yet (invite them to, don't call it an error), or {'error': ...}
    meaning live analysis is down (say so, then fall back to
    get_sleep_history for a best-effort answer).
-4. Report: sleep debt vs an 8h/night target over the window you have,
-   tonight's target bedtime (specific time), and today's likely energy
-   peak (~3-5h after wake) and dip (~7-9h after wake) with what to
-   schedule in each.
+4. For anything forward-looking — when to schedule, when they'll be sharp
+   or flat, how today will go — call forecast_energy. Quote the local
+   times it returns. Do NOT restate the generic "peak 3-5h after wake"
+   rule: the tool computes that from their own wake time and sleep debt,
+   and its answer is the one to use. Report its `basis` when confidence is
+   below 0.4, so a population curve is never passed off as theirs.
+5. Report: sleep debt vs an 8h/night target over the window you have,
+   tonight's target bedtime (specific time), and today's predicted peak
+   and dip as clock times from forecast_energy, with what to schedule in
+   each.
 
 If they have energy to burn despite poor sleep, acknowledge it and suggest
 low-intensity options — do not hand them off yourself; the supervisor decides.
@@ -85,5 +139,7 @@ def build_agent():
     cfg = settings()
     llm = ChatVertexAI(model=cfg.vital_model, temperature=0.2,
                        project=cfg.google_cloud_project, location=cfg.google_cloud_location)
-    return create_react_agent(llm, tools=[log_sleep, get_sleep_history, analyze_sleep_data],
-                              prompt=SYSTEM_PROMPT)
+    return create_react_agent(
+        llm,
+        tools=[log_sleep, get_sleep_history, analyze_sleep_data, forecast_energy],
+        prompt=SYSTEM_PROMPT)

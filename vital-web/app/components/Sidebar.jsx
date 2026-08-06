@@ -1,9 +1,11 @@
 "use client";
 import { accountLabel } from "../lib/auth";
+import EnergyCurve from "./EnergyCurve";
 
 export default function Sidebar({
   threads, activeId, onSelect, onNew, onDelete, open, onClose,
-  memories, onForget, authReady, authUser, authBusy, onSignIn, onSignOut,
+  memories, onForget, forecast, authReady, authUser, authBusy,
+  onSignIn, onSignOut,
 }) {
   return (
     <>
@@ -33,6 +35,8 @@ export default function Sidebar({
             )}
           </nav>
         </div>
+
+        <EnergyCurve forecast={forecast} />
 
         <section className="sidebar-memory" aria-labelledby="sidebar-memory-title">
           <div className="sidebar-memory-head">

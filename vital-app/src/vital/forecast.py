@@ -397,6 +397,50 @@ def forecast(nights: list[Night], now_local: datetime,
                     acute_deficit_h=acute)
 
 
+def nights_from_rows(sleep_logs: list[dict],
+                     health_rows: list[dict]) -> list[Night]:
+    """Merge the two sleep sources into one series, newest last.
+
+    They are not equivalent. `sleep_logs` are manual and carry bedtime and
+    wake time; `health_sleep` rows come from an Apple Health export and
+    carry duration only. A night with no clock times still counts toward
+    sleep debt but contributes nothing to circadian phase — dropping it
+    would throw away real debt information, and pretending it has a wake
+    time would invent phase data.
+
+    On a date collision the manual log wins: the user typed it, and it is
+    the only one of the two that can carry phase.
+    """
+    merged: dict[str, Night] = {}
+
+    for row in health_rows or []:
+        day = str(row.get("date") or "").strip()
+        duration = _int_or_none(row.get("duration_min"))
+        if not day or not duration:
+            continue
+        merged[day] = Night(date=day, duration_min=duration)
+
+    for row in sleep_logs or []:
+        day = str(row.get("log_date") or row.get("date") or "").strip()
+        duration = _int_or_none(row.get("duration_min"))
+        if not day or not duration:
+            continue
+        merged[day] = Night(date=day, duration_min=duration,
+                            wake_time=_parse_time(row.get("wake_time")),
+                            bedtime=_parse_time(row.get("bedtime")),
+                            quality=_int_or_none(row.get("quality")))
+
+    return [merged[day] for day in sorted(merged)]
+
+
+def _int_or_none(value) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
 def _basis(nights: list[Night], phased: int) -> str:
     """One sentence the agent can quote verbatim.
 

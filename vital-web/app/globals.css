@@ -157,6 +157,46 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .thread-list::-webkit-scrollbar-thumb, .sidebar-memory-list::-webkit-scrollbar-thumb {
   background: var(--glass-border); border-radius: 999px;
 }
+/* ---- Predicted energy (A-1) ---- */
+.sidebar-forecast {
+  flex: 0 0 auto; padding: 10px 4px;
+  border-top: 1px solid var(--glass-border);
+}
+.forecast-conf {
+  min-width: 19px; height: 19px; padding: 0 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 999px; background: var(--glass-strong);
+  color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums;
+  cursor: help;
+}
+/* Low confidence is muted, never alarming: a population curve is a
+   perfectly good answer, it just isn't a personal one. */
+.forecast-conf.low { opacity: 0.72; font-style: italic; }
+.forecast-chart { width: 100%; height: auto; display: block; overflow: visible; }
+.forecast-area { fill: var(--glass-strong); opacity: 0.55; }
+.forecast-line {
+  fill: none; stroke: var(--accent, currentColor); stroke-width: 1.6;
+  stroke-linejoin: round; stroke-linecap: round; opacity: 0.9;
+}
+.forecast-peak { fill: var(--accent, currentColor); }
+.forecast-dip { fill: var(--muted); }
+.forecast-marks {
+  display: flex; justify-content: space-between;
+  color: var(--muted); font-size: 10.5px;
+  font-variant-numeric: tabular-nums; padding: 0 4px;
+}
+.forecast-legend { margin: 6px 0 0; padding: 0 4px; display: grid; gap: 3px; }
+.forecast-legend > div { display: flex; gap: 6px; align-items: baseline; }
+.forecast-legend dt {
+  color: var(--muted); font-size: 10.5px; text-transform: uppercase;
+  letter-spacing: 0.04em; min-width: 30px;
+}
+.forecast-legend dd {
+  margin: 0; font-size: 11.5px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sidebar-forecast > .side-hint { padding: 6px 4px 0; }
+
 .sidebar-memory {
   min-height: 0; flex: 1 1 0; overflow: hidden;
   display: flex; flex-direction: column;

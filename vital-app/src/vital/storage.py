@@ -34,6 +34,46 @@ from vital.config import settings
 
 current_user_id: ContextVar[str] = ContextVar("current_user_id", default="local-user")
 
+# Minutes to add to UTC to get the caller's wall clock, supplied per request
+# by the browser. The server runs in UTC and every date it stamps is a UTC
+# date, which for anyone west of Greenwich rolls over during their evening:
+# a night logged at 23:00 in Albany was being filed under tomorrow. That is
+# invisible in the panel and quietly corrupts sleep debt, which is exactly
+# the kind of error a forecast would then present as a confident curve.
+#
+# Defaults to 0 so nothing breaks when a caller omits it; UTC is at least a
+# coherent frame, unlike a mix of guesses.
+current_utc_offset_min: ContextVar[int] = ContextVar(
+    "current_utc_offset_min", default=0)
+
+# UTC-14 (Kiribati) to UTC+14, in minutes. Anything outside is a client bug
+# or someone probing, and both should land on UTC rather than an absurd date.
+MIN_UTC_OFFSET, MAX_UTC_OFFSET = -12 * 60, 14 * 60
+
+
+def set_utc_offset(minutes) -> int:
+    """Validate and install the caller's offset. Returns what was set."""
+    try:
+        value = int(minutes)
+    except (TypeError, ValueError):
+        value = 0
+    if not MIN_UTC_OFFSET <= value <= MAX_UTC_OFFSET:
+        value = 0
+    current_utc_offset_min.set(value)
+    return value
+
+
+def local_now():
+    """The caller's wall clock as a naive datetime."""
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc).replace(tzinfo=None)
+            + timedelta(minutes=current_utc_offset_min.get()))
+
+
+def local_today():
+    """The caller's calendar date — what a sleep log should be filed under."""
+    return local_now().date()
+
 # __ID__ expands to the dialect's autoincrementing integer primary key
 _SCHEMA_TEMPLATE = """
 CREATE TABLE IF NOT EXISTS sleep_logs (
@@ -356,7 +396,9 @@ def log_sleep(bedtime: str, wake_time: str, quality: int) -> int:
                ON CONFLICT (user_id, log_date) DO UPDATE SET
                  bedtime = excluded.bedtime, wake_time = excluded.wake_time,
                  duration_min = excluded.duration_min, quality = excluded.quality""",
-            (current_user_id.get(), date.today().isoformat(), bedtime, wake_time,
+            # local_today(), not date.today(): the server is UTC, so an
+            # evening log in the Americas was being filed under tomorrow.
+            (current_user_id.get(), local_today().isoformat(), bedtime, wake_time,
              duration_min, quality),
         )
     return duration_min

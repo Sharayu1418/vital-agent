@@ -48,6 +48,57 @@ Rules:
 - 3-8 items. Fewer good items beat a packed grid.
 - State tradeoffs honestly in the tradeoffs field."""
 
+FORECAST_RULE = """
+
+ENERGY FORECAST — place demanding items against it.
+{forecast}
+
+Rules for using it:
+- Put the most demanding item of each day nearest a predicted peak, and
+  keep low-effort or restful items near a dip. Say so in the rationale,
+  with the actual predicted time: "climbing at 14:00, your predicted peak".
+- Never contradict the forecast without naming the tradeoff.
+- Confidence is {confidence}. Below 0.4 this is a population curve, not
+  theirs — use it to order the day, but do not present the times as facts
+  about them, and never invent precision the number does not support."""
+
+
+def forecast_block() -> str:
+    """The forecast, rendered for the planner's prompt.
+
+    Injected rather than offered as a tool: the planner is a structured
+    output call, and giving one model both a tool loop and a strict schema
+    is a reliable way to get neither. Failure is silent on purpose — a
+    forecasting outage should cost the plan its energy justification, not
+    stop the user planning their weekend.
+    """
+    try:
+        from vital import forecast as engine
+        from vital import storage
+        from vital.agents.sleep_energy import summarize
+
+        nights = engine.nights_from_rows(
+            storage.sleep_history(engine.DEBT_WINDOW_NIGHTS * 2),
+            storage.health_rows(storage.current_user_id.get()))
+        result = engine.forecast(nights, storage.local_now(), horizon_hours=72)
+        summary = summarize(result)
+    except Exception:
+        return ""
+
+    peak, dip = summary.get("peak"), summary.get("dip")
+    if not peak or not dip:
+        return ""
+    lines = [f"Basis: {summary['basis']}",
+             f"Predicted peak: {peak['at']} ({peak['energy']}) — {peak['why'][0]}",
+             f"Predicted dip:  {dip['at']} ({dip['energy']}) — {dip['why'][0]}",
+             f"Typical wake {summary['typical_wake']}, "
+             f"bedtime {summary['typical_bedtime']}"]
+    if summary["sleep_debt_hours"] > 2:
+        lines.append(f"Carrying {summary['sleep_debt_hours']}h of sleep debt — "
+                     "protect recovery before adding load.")
+    return FORECAST_RULE.format(forecast="\n".join(lines),
+                                confidence=summary["confidence"])
+
 
 def plan_hash(plan: dict) -> str:
     """Canonical hash for idempotent commits (double-click protection)."""
@@ -59,7 +110,7 @@ def make_planner(llm):
     structured = llm.with_structured_output(WeekPlan)
 
     def planner(state) -> Command:
-        prompt = PLANNER_PROMPT
+        prompt = PLANNER_PROMPT + forecast_block()
         edit = state.get("edit_request")
         if edit:
             prompt += (f"\n\nThe user reviewed your previous draft and asked: "

@@ -109,9 +109,15 @@ class Identity:
     one path, no per-route drift."""
     def __init__(self, auth: AuthContext = Depends(authenticate),
                  vital_session: str | None = Cookie(default=None),
-                 x_vital_session: str | None = Header(default=None)):
+                 x_vital_session: str | None = Header(default=None),
+                 x_utc_offset: str | None = Header(default=None)):
         self.auth = auth
         self.session = vital_session or x_vital_session
+        # Installed HERE rather than in middleware: BaseHTTPMiddleware runs
+        # the endpoint in a separate task, so a contextvar set there does
+        # not reliably reach the handler — or the tools it calls. A
+        # dependency resolves in the endpoint's own context.
+        storage.set_utc_offset(x_utc_offset)
 
     def resolve(self, req_user_id: str = "local-user") -> tuple[str, str | None]:
         return resolve_identity(req_user_id, self.auth, self.session)
@@ -660,6 +666,34 @@ def sleep_recent(response: Response, ident: Identity = Depends()) -> dict:
                                "source": row["source"] or "upload"}
     ordered = sorted(nights.values(), key=lambda n: n["date"])[-14:]
     return {"nights": ordered, "target_min": 480}
+
+
+@app.get("/forecast")
+def energy_forecast(response: Response, horizon_hours: int = 24,
+                    ident: Identity = Depends()) -> dict:
+    """Predicted energy curve for the side panel (A-1).
+
+    Local time comes from the X-UTC-Offset header the client sends, not
+    from the server clock, so the curve is anchored to the user's day
+    rather than UTC.
+    """
+    from vital import forecast as engine
+    from vital.agents.sleep_energy import summarize
+
+    user_id, new_session = ident.resolve()
+    current_user_id.set(user_id)     # nights_from_rows reads the contextvar
+    _set_session(response, new_session)
+
+    nights = engine.nights_from_rows(
+        storage.sleep_history(engine.DEBT_WINDOW_NIGHTS * 2),
+        storage.health_rows(user_id))
+    result = engine.forecast(nights, storage.local_now(), horizon_hours)
+    payload = summarize(result)
+    # The panel draws every point; the agent summary thins them out.
+    payload["curve"] = [{"at": p.at.isoformat(timespec="minutes"),
+                         "hours_awake": p.hours_awake, "energy": p.energy}
+                        for p in result.waking_points()]
+    return payload
 
 
 @app.get("/calendar")

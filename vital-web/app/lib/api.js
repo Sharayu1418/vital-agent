@@ -38,6 +38,12 @@ export async function request(path, options = {}, retried = false) {
   const token = tokenProvider ? await tokenProvider(retried) : null;
   const headers = { ...(options.headers || {}) };
   if (token) headers.Authorization = `Bearer ${token}`;
+  /* The server runs in UTC and cannot know the user's day. Without this,
+   * a sleep log at 23:00 Eastern is filed under tomorrow and the energy
+   * forecast is anchored to the wrong clock. getTimezoneOffset() returns
+   * minutes to SUBTRACT from local to reach UTC, so negate it. Read per
+   * request, not once at load: laptops travel and DST happens. */
+  headers["X-UTC-Offset"] = String(-new Date().getTimezoneOffset());
   const res = await fetch(`${API}${path}`, {
     credentials: "include", ...options, headers,
   });
@@ -104,6 +110,7 @@ export const api = {
   threadDelete: (threadId) => request(`/threads/${threadId}`, { method: "DELETE" }),
 
   sleepRecent: () => request("/sleep/recent"),
+  forecast: (hours = 24) => request(`/forecast?horizon_hours=${hours}`),
   calendar: () => request("/calendar"),
   memories: () => request("/memories"),
   forget: (key) => request(`/memories/${key}`, { method: "DELETE" }),
