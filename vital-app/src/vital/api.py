@@ -66,7 +66,12 @@ app.add_middleware(
     allow_origin_regex=settings().preview_origin_regex,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
-    allow_headers=["Authorization", "Content-Type", "X-Vital-Session"],
+    # This is an explicit allowlist, so ANY new request header the frontend
+    # starts sending must be added here too. Miss one and the browser fails
+    # the preflight for every call — the app reports "can't reach the
+    # backend" while the server is healthy and answering curl normally.
+    allow_headers=["Authorization", "Content-Type", "X-Vital-Session",
+                   "X-UTC-Offset"],
     expose_headers=["X-Vital-Session"],
 )
 
