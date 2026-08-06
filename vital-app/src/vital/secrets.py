@@ -50,6 +50,12 @@ def _cipher():
         raise EncryptionUnavailable(
             "TOKEN_ENCRYPTION_KEY is not set — refusing to store OAuth "
             "refresh tokens. Generate one with Fernet.generate_key().")
+    # Strip whitespace. `... | gcloud secrets create --data-file=-` stores
+    # the trailing newline, and Fernet rejects the key with an error that
+    # says nothing about newlines — it looks like a corrupt key, and the
+    # obvious response is to generate another one that fails the same way.
+    if isinstance(key, str):
+        key = key.strip()
     try:
         return Fernet(key.encode() if isinstance(key, str) else key)
     except Exception as exc:
