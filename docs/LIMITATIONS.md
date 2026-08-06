@@ -102,16 +102,27 @@ distinction the data doesn't support.
   context rather than compressing it. Durable facts survive in long-term
   memory, which is injected separately.
 - Memory dedup and recall are semantic. `MEMORY_DEDUP_THRESHOLD` is
-  **0.63**, which looks low because dedup compares a *query* embedding
-  against stored *document* embeddings — `text-embedding-004` is task-typed
-  and those vectors score ~0.24 lower than document-to-document for the
-  same pair. Two earlier thresholds (0.82, 0.87) were calibrated on the
-  document scale and enforced on the query scale, so dedup could never fire
-  at all. `test_the_threshold_still_sits_between_the_bands` in
-  `tests/test_memory_live.py` re-measures and fails if that stops holding.
-  Sample size is small — four real duplicates, four distinct pairs — so add
-  cases when you find them. The failure directions are not symmetric: too
-  high leaves duplicates, too low silently eats distinct memories.
+  **0.87**, and it is only meaningful on `memory.similarity()`'s scale,
+  which embeds both facts as documents. `duplicate_key` uses the store
+  purely to rank candidates and then re-scores them itself, deliberately
+  ignoring the store's own `score`.
+
+  That indirection exists because the two store backends do not agree.
+  `InMemoryStore` embeds a search query with `embed_query`; `PostgresStore`
+  3.1.0 embeds it with `embed_documents`. `text-embedding-004` is
+  task-typed, so the same pair scores ~0.24 apart between them — and every
+  test plus the live eval runs on InMemoryStore while production runs on
+  Postgres. Three thresholds shipped wrong before this was found: 0.82 and
+  0.87 calibrated document-to-document but enforced query-to-document, so
+  dedup never fired; then 0.63, calibrated on the query scale and enforced
+  on the document scale in production, where it merged every distinct fact
+  into one row. Nothing in the test suite could catch any of them.
+
+  `test_the_threshold_still_sits_between_the_bands` in
+  `tests/test_memory_live.py` re-measures both bands. Sample size is small
+  — four real duplicates, four distinct pairs — so add cases when you find
+  them. The failure directions are not symmetric: too high leaves
+  duplicates, too low silently eats distinct memories.
 - Every memory write and recall now costs an embedding call. Small, but on
   the hot path.
 - Memories written *before* semantic memory shipped have no vector, so the

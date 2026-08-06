@@ -1,18 +1,20 @@
-"""The backfill script's merge decision.
+"""Dedup's scoring, and the backfill script that predicts it.
 
-This script is the only code in the repo that DELETES memories in bulk, and
-it decides what to delete by comparing embeddings — so it has to compare
-them on the same scale the threshold was calibrated for.
+Both are here because they are the same property: the merge decision must
+depend on the embedding model and nothing else. It used to depend on which
+store backend was underneath, and that is what broke production.
 
-It did not. `_similarity` embedded both facts as documents while the app's
-dedup embeds the incoming fact as a query, and `text-embedding-004` is
-task-typed: the same pair scores ~0.24 higher document-to-document. Run at
-MEMORY_DEDUP_THRESHOLD=0.63 against document-scale scores, the script would
-have merged every distinct fact in the store.
+    InMemoryStore (every test, the live eval)  query -> embed_query
+    PostgresStore 3.1.0 (production)           query -> embed_documents
 
-That is the third time the same mistake appeared in this codebase — a
-harness measuring one thing while production measures another — so it gets
-a test rather than a comment.
+text-embedding-004 is task-typed, so the same pair scores ~0.24 apart
+between the two. A threshold tuned against the tests merged every distinct
+fact into a single row in production, and no test could have caught it,
+because the tests were the thing being agreed with.
+
+So duplicate_key now uses the store to RANK candidates and re-scores them
+itself. The tests below pin that: a store can report any score it likes and
+the outcome must not move.
 """
 import importlib.util
 import os
@@ -24,88 +26,118 @@ os.environ.setdefault("OPENWEATHER_API_KEY", "test")
 os.environ.setdefault("GOOGLE_PLACES_API_KEY", "test")
 
 import pytest
+from langgraph.store.memory import InMemoryStore
+
+from vital import memory
 
 SCRIPT = (pathlib.Path(__file__).resolve().parent.parent
           / "scripts" / "backfill_memory_vectors.py")
 
+
+# ---------- the root cause: the backend must not get a vote ----------
+
+class Hit:
+    def __init__(self, key, fact, score):
+        self.key = key
+        self.value = {"fact": fact}
+        self.score = score
+
+
+class LyingStore:
+    """A store whose reported score is deliberately wrong.
+
+    Not a strawman: this is the difference between the two real backends,
+    exaggerated to a value no correct implementation could produce.
+    """
+
+    def __init__(self, hits, embeddings):
+        self._hits = hits
+        self.embeddings = embeddings
+
+    def search(self, _ns, query=None, limit=None):
+        return self._hits
+
+
+@pytest.fixture
+def embedder():
+    return InMemoryStore(index=memory.index_config()).embeddings
+
+
+def test_a_confident_backend_cannot_force_a_merge(embedder):
+    """PostgresStore scored unrelated facts around 0.80 where the tests saw
+    0.56. Whatever the store claims, two facts that are not alike must not
+    merge."""
+    store = LyingStore(
+        [Hit("k1", "User is an experienced runner.", score=0.999)], embedder)
+
+    assert memory.duplicate_key(store, "u1", "User has a low budget.") is None, (
+        "the store's score decided the merge — that is the production bug")
+
+
+def test_a_pessimistic_backend_cannot_block_a_merge(embedder):
+    """The mirror case. A backend reporting 0.0 for an identical fact must
+    not be able to leave a duplicate behind."""
+    store = LyingStore([Hit("k1", "User lives in Albany.", score=0.0)], embedder)
+
+    assert memory.duplicate_key(store, "u1", "User lives in Albany.") == "k1"
+
+
+def test_similarity_is_symmetric(embedder):
+    """The property that makes one threshold mean one thing. If the two
+    directions disagree, the number depends on argument order, and dedup
+    would merge or not depending on which fact arrived first."""
+    a, b = "User lives in Albany.", "User is located near Albany."
+    assert (memory.similarity(a, b, via=embedder)
+            == pytest.approx(memory.similarity(b, a, via=embedder)))
+
+
+def test_candidates_beyond_the_top_hit_are_considered(embedder):
+    """duplicate_key only saw hits[0] before. The store ranks on its own
+    scale, so the true duplicate is not reliably first — taking only the top
+    hit would let a duplicate through whenever the backend ordered
+    differently than we score."""
+    store = LyingStore([
+        Hit("k1", "User dislikes gyms.", score=0.99),
+        Hit("k2", "User lives in Albany.", score=0.01),
+    ], embedder)
+
+    assert memory.duplicate_key(store, "u1", "User lives in Albany.") == "k2"
+
+
+def test_no_candidates_means_no_merge(embedder):
+    assert memory.duplicate_key(LyingStore([], embedder), "u1", "anything") is None
+
+
+def test_a_candidate_with_no_fact_text_is_skipped(embedder):
+    """Defensive: a malformed row must not crash the write path, because a
+    failed dedup takes the whole memory write with it."""
+    store = LyingStore([Hit("k1", "", score=0.99)], embedder)
+    assert memory.duplicate_key(store, "u1", "User lives in Albany.") is None
+
+
+# ---------- the backfill script ----------
 
 @pytest.fixture
 def backfill():
     spec = importlib.util.spec_from_file_location("backfill_script", SCRIPT)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    module._embedder.cache_clear()
-    yield module
-    module._embedder.cache_clear()
+    return module
 
 
-class TaskTypedEmbedder:
-    """Stands in for a task-typed model.
+def test_the_script_scores_through_the_app(backfill, monkeypatch):
+    """It must not have an opinion of its own. It used to, and that is how a
+    bulk delete ended up calibrated against a scale the app never used."""
+    seen = {}
 
-    Documents and queries land in different subspaces, so a pair scores high
-    doc-to-doc and low doc-to-query — the real behaviour, exaggerated so the
-    difference is unmistakable. Also records which method saw which text.
-    """
+    def fake_similarity(a, b, via=None):
+        seen["args"] = (a, b)
+        return 0.5
 
-    def __init__(self):
-        self.documents: list[str] = []
-        self.queries: list[str] = []
+    monkeypatch.setattr(backfill.memory, "similarity", fake_similarity)
 
-    def embed_documents(self, texts):
-        self.documents.extend(texts)
-        return [[1.0, 0.0] for _ in texts]
-
-    def embed_query(self, text):
-        self.queries.append(text)
-        return [0.0, 1.0]
-
-
-def test_the_keeper_is_a_document_and_the_candidate_is_a_query(backfill,
-                                                               monkeypatch):
-    """The whole bug in one assertion. Reversing these, or embedding both
-    the same way, puts the score on a scale the threshold does not match."""
-    embedder = TaskTypedEmbedder()
-    monkeypatch.setattr(backfill.memory, "index_config",
-                        lambda: {"embed": embedder})
-
-    backfill._similarity(None, "User is in Albany.", "User is near Albany.")
-
-    assert embedder.documents == ["User is in Albany."], (
-        "the SURVIVING fact is the stored one — it must be embedded as a "
-        "document, exactly as store.put() embedded it")
-    assert embedder.queries == ["User is near Albany."], (
-        "the candidate is what dedup passes to store.search(query=...) — "
-        "embedding it as a document inflates the score onto a scale "
-        "MEMORY_DEDUP_THRESHOLD was never calibrated against")
-
-
-def test_it_scores_on_the_query_path_not_the_document_path(backfill,
-                                                           monkeypatch):
-    """Behavioural counterpart to the assertion above: with an embedder
-    whose two subspaces are orthogonal, a doc-doc implementation returns
-    1.0 and the correct one returns 0.0. A mutation that flips this cannot
-    survive both tests."""
-    embedder = TaskTypedEmbedder()
-    monkeypatch.setattr(backfill.memory, "index_config",
-                        lambda: {"embed": embedder})
-
-    score = backfill._similarity(None, "User is in Albany.",
-                                 "User is near Albany.")
-
-    assert score == pytest.approx(0.0), (
-        f"scored {score} — that is the document-to-document value, which is "
-        "systematically higher than what dedup sees at runtime")
-
-
-def test_a_plain_callable_embedder_still_works(backfill, monkeypatch):
-    """The offline stand-in is a bare function with no embed_query, and
-    LangGraph treats it as an EmbeddingsFunc. The fallback branch keeps the
-    script runnable against it rather than raising AttributeError."""
-    monkeypatch.setattr(backfill.memory, "index_config",
-                        lambda: {"embed": lambda texts: [[1.0, 0.0]
-                                                         for _ in texts]})
-
-    assert backfill._similarity(None, "a", "b") == pytest.approx(1.0)
+    assert backfill._similarity("store", "keeper fact", "candidate fact") == 0.5
+    assert seen["args"] == ("keeper fact", "candidate fact")
 
 
 def test_the_dry_run_writes_nothing(backfill, monkeypatch):

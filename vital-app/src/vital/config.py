@@ -75,30 +75,32 @@ class Settings(BaseSettings):
     embedding_dims: int = 768          # text-embedding-004 output size
     # Cosine similarity above which a new fact OVERWRITES an existing one.
     #
-    # THIS NUMBER LOOKS LOW ON PURPOSE. Dedup compares a QUERY embedding
-    # against stored DOCUMENT embeddings, because it goes through
-    # store.search(query=...). text-embedding-004 is task-typed
-    # (RETRIEVAL_QUERY vs RETRIEVAL_DOCUMENT), and those vectors do not
-    # share a space — the same pair of sentences scores ~0.24 lower on the
-    # query path than document-to-document.
+    # Compared on ONE scale, everywhere: memory.similarity() embeds both
+    # facts as documents. That is not the default behaviour and the number
+    # is meaningless without it — dedup used to inherit whatever scale the
+    # store backend scored on, and the two backends disagree:
     #
-    # MEASURED on the runtime path — scripts/tune_memory_threshold.py,
-    # 5 Aug 2026:
+    #   InMemoryStore (tests, live eval)  search query -> embed_query
+    #   PostgresStore 3.1.0 (production)  search query -> embed_documents
     #
-    #                            doc-doc      doc-query (what dedup sees)
-    #   should merge   min        0.930          0.694
-    #   must not merge max       0.800          0.559
+    # text-embedding-004 is task-typed, so the same pair scores ~0.24 lower
+    # on the query path. Three thresholds shipped before anyone noticed:
+    # 0.82 and 0.87 were calibrated doc-doc and enforced doc-query so dedup
+    # never fired; 0.63 was calibrated doc-query and enforced doc-doc in
+    # production, where it merged every distinct fact into a single row.
+    # duplicate_key() now re-scores candidates itself and ignores the
+    # store's score entirely.
     #
-    # 0.63 sits mid-gap on the doc-query scale. Two earlier values, 0.82 and
-    # 0.87, were calibrated against doc-doc and enforced against doc-query,
-    # so dedup could never fire at all — the tuner and the code were
-    # measuring different things.
+    # MEASURED symmetrically — scripts/tune_memory_threshold.py, 5 Aug 2026:
     #
-    # test_memory_live.py::test_the_threshold_still_sits_between_the_bands
-    # re-measures and fails if that ever stops holding. The failure
-    # directions are NOT symmetric: too high leaves duplicates, too low
-    # silently eats distinct memories.
-    memory_dedup_threshold: float = 0.63
+    #   should merge   min : 0.930
+    #   must not merge max : 0.800
+    #
+    # 0.87 sits mid-gap. test_memory_live.py::
+    # test_the_threshold_still_sits_between_the_bands re-measures and fails
+    # if that stops holding. The failure directions are NOT symmetric: too
+    # high leaves duplicates, too low silently eats distinct memories.
+    memory_dedup_threshold: float = 0.87
 
     # --- Phase 3: events provider (free key: developer.ticketmaster.com) ---
     ticketmaster_api_key: str | None = None

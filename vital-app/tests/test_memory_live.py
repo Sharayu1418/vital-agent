@@ -152,43 +152,28 @@ def _extractor(memory_mod, fact_text):
 
 # ---------- the guard that stops this drifting again ----------
 
-def runtime_similarity(embed, stored: str, incoming: str) -> float:
-    """Similarity as DEDUP actually computes it.
-
-    Dedup goes through store.search(query=...), so the stored fact is a
-    DOCUMENT embedding and the incoming fact is a QUERY embedding.
-    text-embedding-004 is task-typed, so these do not share a space and the
-    same pair scores ~0.24 lower here than document-to-document.
-
-    Calibrating on doc-doc while enforcing on doc-query is exactly how two
-    thresholds shipped that could never fire.
-    """
-    import math
-
-    doc = (embed.embed_documents([stored])[0] if hasattr(embed, "embed_documents")
-           else embed([stored])[0])
-    query = (embed.embed_query(incoming) if hasattr(embed, "embed_query")
-             else embed([incoming])[0])
-    dot = sum(x * y for x, y in zip(doc, query))
-    nd = math.sqrt(sum(x * x for x in doc)) or 1.0
-    nq = math.sqrt(sum(x * x for x in query)) or 1.0
-    return dot / (nd * nq)
-
-
 def test_the_threshold_still_sits_between_the_bands():
     """Re-measures both bands and checks the configured threshold separates
-    them. This is the regression guard: if the embedding model changes, or
-    LangGraph changes how it embeds queries, dedup would otherwise stop
-    working SILENTLY — which is what happened twice before this existed."""
+    them. This is the regression guard: if the embedding model changes,
+    dedup would otherwise stop working SILENTLY — which is what happened
+    three times before this existed.
+
+    It calls memory.similarity directly. It used to carry its own
+    `runtime_similarity`, reimplementing what it believed dedup did, and
+    that belief was wrong — it modelled InMemoryStore's query embedding
+    while production ran Postgres, which embeds queries as documents. A
+    guard that re-derives the thing it is guarding only pins your own
+    assumption.
+    """
     import itertools
 
     from vital import memory
     embed = memory.index_config()["embed"]
     threshold = memory.settings().memory_dedup_threshold
 
-    should_merge = [runtime_similarity(embed, a, b)
+    should_merge = [memory.similarity(a, b, via=embed)
                     for a, b in itertools.combinations(ALBANY_DUPLICATES, 2)]
-    must_not = [runtime_similarity(embed, a, b) for a, b in DISTINCT_PAIRS]
+    must_not = [memory.similarity(a, b, via=embed) for a, b in DISTINCT_PAIRS]
 
     lowest_merge, highest_keep = min(should_merge), max(must_not)
     print(f"\n  should merge   min: {lowest_merge:.3f}")

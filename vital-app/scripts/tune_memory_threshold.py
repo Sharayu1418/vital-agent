@@ -41,57 +41,38 @@ def main() -> int:
     from test_memory_live import ALBANY_DUPLICATES, DISTINCT_PAIRS
     from vital import memory
 
+    # ONE measurement, through the same function dedup calls. This script
+    # used to compute its own cosine and print two columns, doc-doc and
+    # doc-query, leaving the reader to pick — which is how three different
+    # thresholds got calibrated against three different scales. The choice
+    # now lives in memory.similarity() and there is nothing here to get
+    # wrong.
     embed = memory.index_config()["embed"]
 
-    # TWO measurements, because they are not the same number.
-    #
-    # doc-doc  : both texts embedded as documents. Symmetric, and what a
-    #            naive tuner reports.
-    # doc-query: the STORED fact as a document, the INCOMING fact as a
-    #            query — which is what store.search(query=...) actually
-    #            does at runtime.
-    #
-    # text-embedding-004 is task-typed (RETRIEVAL_DOCUMENT vs
-    # RETRIEVAL_QUERY), so these can differ substantially. Calibrating on
-    # doc-doc and enforcing on doc-query is how the first two thresholds
-    # were wrong: 0.93 measured, but dedup never fired.
-    def as_docs(texts):
-        if hasattr(embed, "embed_documents"):
-            return embed.embed_documents(list(texts))
-        return embed(list(texts))
-
-    def as_query(text):
-        if hasattr(embed, "embed_query"):
-            return embed.embed_query(text)
-        return embed([text])[0]
-
-    def both(a, b):
-        (da, db) = as_docs([a, b])
-        return cosine(da, db), cosine(da, as_query(b))
+    def score(a, b):
+        return memory.similarity(a, b, via=embed)
 
     print("\nSHOULD MERGE — variants of one fact")
-    print(f"{'doc-doc':>10} {'doc-query':>11}   (runtime uses doc-query)")
     print("-" * 72)
     merge_scores = []
     for a, b in itertools.combinations(ALBANY_DUPLICATES, 2):
-        sym, runtime = both(a, b)
-        merge_scores.append(runtime)
-        print(f"  {sym:8.3f} {runtime:10.3f}   {a[:26]:28} | {b[:26]}")
+        value = score(a, b)
+        merge_scores.append(value)
+        print(f"  {value:8.3f}   {a[:30]:32} | {b[:30]}")
 
     print("\nMUST NOT MERGE — genuinely different facts")
-    print(f"{'doc-doc':>10} {'doc-query':>11}")
     print("-" * 72)
     keep_scores = []
     for a, b in DISTINCT_PAIRS:
-        sym, runtime = both(a, b)
-        keep_scores.append(runtime)
-        print(f"  {sym:8.3f} {runtime:10.3f}   {a[:26]:28} | {b[:26]}")
+        value = score(a, b)
+        keep_scores.append(value)
+        print(f"  {value:8.3f}   {a[:30]:32} | {b[:30]}")
 
     lowest_merge = min(merge_scores)
     highest_keep = max(keep_scores)
 
     print("\n" + "=" * 72)
-    print("  Using the doc-query column — that is what dedup compares.")
+    print("  Scored through memory.similarity() — what dedup compares.")
     print(f"  lowest  'should merge'  similarity : {lowest_merge:.3f}")
     print(f"  highest 'must not merge' similarity: {highest_keep:.3f}")
 

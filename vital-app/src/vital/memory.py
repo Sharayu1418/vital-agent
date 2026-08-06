@@ -103,21 +103,92 @@ def _ns(user_id: str) -> tuple:
     return (user_id, NAMESPACE_SUFFIX)
 
 
+def _embedder(via=None):
+    """Resolve an embedder from a store, an Embeddings, or nothing.
+
+    Preferring the STORE's own embedder matters: it is the one that produced
+    the stored vectors, so we can never score against a different model than
+    the one that wrote the data.
+    """
+    if via is None:
+        return index_config()["embed"]
+    return getattr(via, "embeddings", None) or via
+
+
+def _as_documents(embed, texts: list[str]) -> list[list[float]]:
+    """Embed every text the SAME way. LangGraph wraps plain callables in
+    EmbeddingsLambda, so the method form is the normal path; the callable
+    branch is for test doubles that skip that wrapping."""
+    if hasattr(embed, "embed_documents"):
+        return embed.embed_documents(list(texts))
+    return embed(list(texts))
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    import math
+
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a)) or 1.0
+    nb = math.sqrt(sum(x * x for x in b)) or 1.0
+    return dot / (na * nb)
+
+
+def similarity(a: str, b: str, via=None) -> float:
+    """Similarity between two facts, on the ONE scale the threshold means.
+
+    Both texts are embedded as documents, so the measure is symmetric and
+    identical everywhere it is used — dedup, the backfill script, the
+    tuner, the live eval. Anything that reasons about
+    MEMORY_DEDUP_THRESHOLD must call this rather than compute its own; four
+    separate re-implementations of "cosine between two facts" are what let
+    the tuner, the tests and production drift onto three different scales.
+
+    `via` may be a store or an Embeddings; omit it and a fresh embedder is
+    built, which is convenient for scripts and wasteful in a loop.
+    """
+    va, vb = _as_documents(_embedder(via), [a, b])
+    return _cosine(va, vb)
+
+
+# How many near neighbours to re-score. The store's ranking only has to get
+# the right fact into this window; the merge decision is made below.
+DEDUP_CANDIDATES = 5
+
+
 def duplicate_key(store, user_id: str, fact: str) -> str | None:
     """Key of an existing fact this one should REPLACE, or None.
 
     Semantic, not textual. difflib read "User is in Albany" and "User is
     located in or near Albany" as different strings and production ended up
     with four rows for one fact.
+
+    The store ranks candidates; it does NOT get to decide. Its `score` is
+    deliberately ignored, because the two backends do not compute it the
+    same way: InMemoryStore embeds the search query with embed_query, while
+    PostgresStore 3.1.0 embeds it with embed_documents. text-embedding-004
+    is task-typed, so for the same pair those differ by ~0.24 — which meant
+    a threshold calibrated against the tests (InMemoryStore) collapsed every
+    distinct fact into one row in production (Postgres). Re-scoring here
+    makes the decision depend only on the model, never on the backend.
     """
-    hits = store.search(_ns(user_id), query=fact, limit=1)
-    if not hits:
+    hits = store.search(_ns(user_id), query=fact, limit=DEDUP_CANDIDATES)
+    candidates = [(h.key, (h.value or {}).get("fact") or "") for h in hits]
+    candidates = [(key, text) for key, text in candidates if text]
+    if not candidates:
         return None
-    top = hits[0]
-    score = getattr(top, "score", None)
-    if score is not None and score >= settings().memory_dedup_threshold:
-        return top.key
-    return None
+
+    # One batched call: the incoming fact plus every candidate, all as
+    # documents.
+    vectors = _as_documents(_embedder(store),
+                            [fact] + [text for _, text in candidates])
+    incoming, stored = vectors[0], vectors[1:]
+
+    best_key, best_score = None, settings().memory_dedup_threshold
+    for (key, _), vector in zip(candidates, stored):
+        score = _cosine(incoming, vector)
+        if score >= best_score:
+            best_key, best_score = key, score
+    return best_key
 
 
 def remember(store, user_id: str, transcript: str, llm) -> int:
