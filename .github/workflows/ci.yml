@@ -1,0 +1,98 @@
+# Runs on every push and pull request.
+#
+# This exists because two production outages in one afternoon were both
+# caught by tools that already existed and simply were not run:
+#
+#   - a JSX prop referenced an undefined function, white-screening the
+#     whole app. `next build` catches it in two seconds.
+#   - a new request header was not added to the CORS allowlist, so every
+#     API call failed the browser preflight while the server stayed
+#     healthy. The contract test catches it in the backend suite.
+#
+# Neither needed a smarter test. They needed the existing ones to run
+# without anybody having to remember.
+#
+# Deliberately NOT here: the live evals. test_memory_live, test_crisis_live
+# and test_routing all call real models — they cost money, they need
+# credentials, and they are flaky in the way anything talking to a hosted
+# model is flaky. A CI job that is sometimes red for reasons nobody
+# controls gets ignored, and then it protects nothing. Those stay
+# explicitly invoked.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push supersedes the first: no point finishing a run for code
+# that has already been replaced.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: backend tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: vital-app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      # No credentials are provided on purpose. conftest pins
+      # GOOGLE_CLOUD_PROJECT to "test" and patches every network seam, so a
+      # suite that needs the internet to pass has a bug in its isolation —
+      # and that bug is worth failing over.
+      - name: Run tests
+        run: uv run pytest -q
+
+      - name: Lint
+        run: uv run ruff check src tests scripts
+        continue-on-error: true   # advisory for now; not a merge blocker
+
+  frontend:
+    name: frontend build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: vital-web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: vital-web/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Unit tests
+        run: pnpm test
+
+      # THE check. `next build` runs lint and type validity, which is what
+      # catches an undefined identifier in JSX before it reaches a browser.
+      - name: Build
+        run: pnpm build
+        env:
+          # The build fails without an API base by design (P1-11) — a
+          # frontend deployed pointing at nothing looks fine and works for
+          # nobody. CI only needs it to be present and well-formed.
+          NEXT_PUBLIC_API_BASE: https://ci.invalid
