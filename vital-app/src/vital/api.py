@@ -20,7 +20,8 @@ from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 from starlette.concurrency import run_in_threadpool
 
-from vital import buddies, guardrails, ingest, memory, metrics, storage
+from vital import (buddies, guardrails, ingest, memory, metrics, storage,
+                   vocabulary)
 from vital.config import settings
 from vital.graph import (build_graph_async, close_graph_resources,
                          write_memories)
@@ -312,6 +313,9 @@ def _graph_stream(graph_input, config, user_id: str, screen=None):
         # run_id -> start time, so tool duration can be reported alongside
         # outcome. Popped on the matching on_tool_end.
         tool_started: dict = {}
+        # Nodes we have already announced this turn. Without it, LangGraph's
+        # nested chain events would repeat the same opener several times.
+        announced: set = set()
 
         async def is_crisis() -> bool:
             try:
@@ -332,10 +336,25 @@ def _graph_stream(graph_input, config, user_id: str, screen=None):
                         streamed_tokens = True
                         streamed_chars += len(chunk)
                         out.append({"event": "token", "data": chunk})
+                elif kind == "on_chain_start" and node and node not in announced:
+                    # The gap between "sent" and the first token is the part
+                    # that feels slow. Saying which kind of thinking is
+                    # happening costs nothing and removes the dead air.
+                    announced.add(node)
+                    opener = vocabulary.for_agent(node)
+                    if opener:
+                        out.append({"event": "status", "data": opener})
                 elif kind == "on_tool_start":
                     tool_started[event.get("run_id")] = time.monotonic()
+                    # Say what is happening FOR the user, not which function
+                    # is running. The old line was `activity_scout: using
+                    # search_places` — accurate, unreadable, and it leaked
+                    # the internal topology to anyone watching the network
+                    # tab.
                     out.append({"event": "status",
-                                "data": f"{node}: using {event['name']}"})
+                                "data": vocabulary.for_tool(
+                                    event.get("name", ""),
+                                    seed=str(event.get("run_id", "")))})
                 elif kind == "on_tool_end":
                     # Observe EVERY tool here rather than inside each tool.
                     # One place, and a new tool is covered the day it is
