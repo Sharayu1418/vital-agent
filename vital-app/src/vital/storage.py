@@ -204,6 +204,35 @@ def schema_sql(dialect: str) -> str:
     return _SCHEMA_TEMPLATE.replace("__ID__", pk)
 
 
+# Columns added to tables that already exist in production. CREATE TABLE IF
+# NOT EXISTS silently does nothing for a table that is already there, so a
+# new column in _SCHEMA_TEMPLATE would appear on fresh databases and never
+# on the live one — the worst possible split, because tests would pass.
+#
+# Deliberately the cheap mechanism: idempotent ALTERs, applied at startup,
+# failures swallowed because "duplicate column" is the expected outcome on
+# every boot after the first. It is not a migration framework and should not
+# grow into one; if this list gets long, that is the signal to adopt a real
+# one rather than to keep appending.
+_MIGRATIONS = [
+    # Approximate meeting coordinates for the buddy board (2dp, ~1.1km).
+    # Never an address: enough to rank venues fairly between two people,
+    # useless for finding where anybody lives.
+    "ALTER TABLE activity_posts ADD COLUMN lat REAL",
+    "ALTER TABLE activity_posts ADD COLUMN lng REAL",
+    "ALTER TABLE activity_requests ADD COLUMN requester_lat REAL",
+    "ALTER TABLE activity_requests ADD COLUMN requester_lng REAL",
+]
+
+
+def apply_migrations(conn) -> None:
+    for statement in _MIGRATIONS:
+        try:
+            conn.execute(statement)
+        except Exception:
+            pass          # already applied; the only expected failure
+
+
 def pg_sql(sql: str) -> str:
     """SQLite-style '?' placeholders → psycopg '%s'. Our SQL never contains
     a literal question mark, so plain replace is safe."""
@@ -216,6 +245,7 @@ class _SqliteConn:
     def __init__(self, path: str):
         self.raw = sqlite3.connect(path)
         self.raw.executescript(schema_sql("sqlite"))
+        apply_migrations(self.raw)
         self.raw.row_factory = sqlite3.Row
 
     def execute(self, sql: str, params=()):
@@ -282,6 +312,15 @@ def _pg_pool(conninfo: str):
             for stmt in schema_sql("postgres").split(";"):
                 if stmt.strip():
                     conn.execute(stmt)
+        # Separate connection: a failed ALTER aborts the whole Postgres
+        # transaction, so running these alongside the schema would take the
+        # CREATEs down with them on the second boot.
+        for statement in _MIGRATIONS:
+            try:
+                with pool.connection() as conn:
+                    conn.execute(statement)
+            except Exception:
+                pass
     except Exception:
         pool.close()
         _pg_pool.cache_clear()  # don't cache a broken pool

@@ -10,12 +10,13 @@ Identity model (interim until real auth in Phase 5) — see security.py:
   boot without a token, and always require that token.
 """
 import asyncio
+import re
 import xml.etree.ElementTree as ET
 import zipfile
 from contextlib import asynccontextmanager
 
-from fastapi import (Cookie, Depends, FastAPI, Header, HTTPException, Response,
-                     UploadFile)
+from fastapi import (BackgroundTasks, Cookie, Depends, FastAPI, Header,
+                     HTTPException, Response, UploadFile)
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 from starlette.concurrency import run_in_threadpool
@@ -718,7 +719,8 @@ def sleep_recent(response: Response, ident: Identity = Depends()) -> dict:
 
 
 @app.get("/forecast")
-def energy_forecast(response: Response, horizon_hours: int = 24,
+def energy_forecast(background: BackgroundTasks, response: Response,
+                    horizon_hours: int = 24,
                     ident: Identity = Depends()) -> dict:
     """Predicted energy curve for the side panel (A-1).
 
@@ -733,11 +735,18 @@ def energy_forecast(response: Response, horizon_hours: int = 24,
     current_user_id.set(user_id)     # nights_from_rows reads the contextvar
     _set_session(response, new_session)
 
-    # Refresh from a linked wearable if the data is stale. Best effort by
-    # design: a provider outage must degrade the forecast's freshness, not
-    # break the panel.
-    from vital import sync as sync_mod
-    sync_mod.sync_if_stale(user_id)
+    # Wearable refresh runs AFTER the response is sent, not before it.
+    #
+    # Inline, this was a token refresh plus a paginated fetch against
+    # Google — seconds of somebody else's latency inside a panel request,
+    # on every load, to change a curve that only moves once a morning. The
+    # cost of deferring is that a just-synced night appears one panel load
+    # later. That is the right trade: nobody notices data arriving a
+    # refresh late; everybody notices the panel hanging.
+    #
+    # The contextvars are read now, on the request's context, because the
+    # background task runs outside it.
+    background.add_task(_sync_wearable_later, user_id)
 
     nights = engine.nights_from_rows(
         storage.sleep_history(engine.DEBT_WINDOW_NIGHTS * 2),
@@ -749,6 +758,22 @@ def energy_forecast(response: Response, horizon_hours: int = 24,
                          "hours_awake": p.hours_awake, "energy": p.energy}
                         for p in result.waking_points()]
     return payload
+
+
+def _sync_wearable_later(user_id: str) -> None:
+    """Background wearable refresh. Never raises.
+
+    An exception in a BackgroundTask is logged by Starlette but the client
+    has already been served, so a failure here must not look like anything
+    to anyone except the tool-health metric — which sync() already writes.
+    """
+    from vital import sync as sync_mod
+
+    current_user_id.set(user_id)     # background tasks get a fresh context
+    try:
+        sync_mod.sync_if_stale(user_id)
+    except Exception:
+        pass
 
 
 # ---------- wearable connections (Google Health / Fitbit) ----------
@@ -1105,6 +1130,67 @@ def decide_activity_request(request_id: int, req: BuddyRequestDecision,
     _set_session(response, new_session)
     return {"request": _buddy_call(buddies.decide_request, user_id,
                                    request_id, req.status)}
+
+
+@app.get("/activity-requests/{request_id}/meeting.pdf")
+def meeting_plan(request_id: int, ident: Identity = Depends()):
+    """Where these two should meet, as a PDF.
+
+    Only the two people in an ACCEPTED match can fetch it, and both get the
+    same document — so everything in it is something each has agreed the
+    other may see. Coordinates and user ids are not in it; distance is, and
+    that is the only part that affects the decision.
+    """
+    from fastapi.responses import Response as RawResponse
+
+    from vital import meetup, meetup_pdf
+    from vital.tools.places import search_near
+
+    user_id, _ = ident.resolve()
+    row = _buddy_call(buddies.meeting_context, user_id, request_id)
+
+    if not all(row.get(k) is not None
+               for k in ("lat", "lng", "requester_lat", "requester_lng")):
+        raise HTTPException(
+            status_code=409,
+            detail="One of you joined before locations were shared, so there "
+                   "is nothing to measure between. Re-post or re-request and "
+                   "it will work.")
+
+    owner = meetup.Person(row["owner_name"] or "Them",
+                          float(row["lat"]), float(row["lng"]))
+    guest = meetup.Person(row["requester_name"] or "Them",
+                          float(row["requester_lat"]),
+                          float(row["requester_lng"]))
+
+    centre = meetup.midpoint(owner, guest)
+    found = search_near(row["activity"], centre[0], centre[1],
+                        radius_km=meetup.search_radius_km(owner, guest))
+    if "error" in found:
+        metrics.log_tool(user_id, "meeting_plan", "error",
+                         error=found["error"])
+        raise HTTPException(status_code=503,
+                            detail="Venue search is down right now — try again "
+                                   "in a few minutes.")
+
+    venues = [meetup.Venue(**v) for v in found.get("venues", [])]
+    # Preferences both stated on the post, so the reasons cite something
+    # real rather than inventing a rationale.
+    preferences = [p for p in (row.get("time_window"), row.get("vibe"),
+                               row.get("skill_level"), row.get("budget")) if p]
+    chosen = meetup.rank(venues, owner, guest, preferences=preferences)
+
+    pdf = meetup_pdf.build(
+        activity=row["activity"], a=owner, b=guest, suggestions=chosen,
+        footnote=meetup.why_not_others(venues, chosen, owner, guest),
+        generated=storage.local_now().strftime("%d %b %Y"))
+    metrics.log_tool(user_id, "meeting_plan", "ok")
+
+    safe = re.sub(r"[^A-Za-z0-9]+", "-", row["activity"]).strip("-").lower()
+    return RawResponse(
+        content=pdf, media_type="application/pdf",
+        headers={"Content-Disposition":
+                 f'inline; filename="vital-{safe or "meetup"}.pdf"'})
 
 
 @app.post("/activity-posts/{post_id}/report")

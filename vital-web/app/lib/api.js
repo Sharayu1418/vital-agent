@@ -147,6 +147,10 @@ export const api = {
   sleepRecent: () => request("/sleep/recent"),
   forecast: (hours = 24) => request(`/forecast?horizon_hours=${hours}`),
 
+  // Returns a PDF, so the caller reads res.blob() rather than res.json().
+  meetingPlan: (requestId) =>
+    request(`/activity-requests/${requestId}/meeting.pdf`),
+
   // ---- wearable connections ----
   connections: () => request("/connections"),
   connectStart: (provider) => request(`/connect/${provider}`),

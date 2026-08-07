@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { LoadingScreen, LoginScreen, UnconfiguredScreen } from "./components/AuthGate";
 import Chat from "./components/Chat";
-import { MenuIcon, PanelRightIcon, SpeakerIcon, UploadIcon } from "./components/icons";
+import { MenuIcon, PanelRightIcon, SpeakerIcon } from "./components/icons";
 import Sidebar from "./components/Sidebar";
 import SidePanel from "./components/SidePanel";
 import {
@@ -607,6 +607,7 @@ export default function Home() {
         open={sidebarOpen} onClose={() => setSidebarOpen(false)}
         memories={memories} onForget={forget} forecast={forecast}
         connections={connections} onConnectionChanged={refreshPanel}
+        onUpload={upload}
         authReady={authReady} authUser={authUser} authBusy={authBusy}
         onSignIn={signIn} onSignOut={signOut} />
 
@@ -624,11 +625,10 @@ export default function Home() {
                 title={autoRead ? "Read replies aloud: on" : "Read replies aloud: off"}
                 onClick={toggleAutoRead}><SpeakerIcon /></button>
             )}
-            <label className="icon-btn" title="Upload sleep data (CSV or Apple Health XML)">
-              <UploadIcon />
-              <input type="file" accept=".csv,.xml" hidden
-                onChange={(e) => e.target.files[0] && upload(e.target.files[0])} />
-            </label>
+            {/* The upload used to live here, as a top-bar icon of equal
+                weight to everything else — which made hand-feeding the app
+                a file look like the normal way to give it sleep data. It
+                now sits under Devices as the fallback it actually is. */}
             <button className="icon-btn only-mobile" aria-label="Open insights panel"
               title="Sleep, plan, and what VITAL knows"
               onClick={() => setPanelOpen(true)}><PanelRightIcon /></button>

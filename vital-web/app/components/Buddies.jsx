@@ -264,7 +264,10 @@ function Requests({ requests, onDecide }) {
               <button className="bud-minor" onClick={() => onDecide(q.id, "rejected")}>Decline</button>
             </div>
           ) : (
-            <p className="bud-sent">{q.status}</p>
+            <>
+              <p className="bud-sent">{q.status}</p>
+              {q.status === "accepted" && <MeetingPlanLink requestId={q.id} />}
+            </>
           )}
         </div>
       ))}
@@ -277,9 +280,50 @@ function Requests({ requests, onDecide }) {
             <span className="bud-where">with {q.display_name}</span>
           </div>
           <p className={`bud-status bud-status-${q.status}`}>{q.status}</p>
+          {q.status === "accepted" && <MeetingPlanLink requestId={q.id} />}
         </div>
       ))}
     </div>
+  );
+}
+
+/* The meeting-point document, fetched only once someone asks for it.
+ *
+ * Not an <a href> straight to the endpoint: the request needs the session
+ * cookie and the auth header, which a plain link cannot attach. Fetch it,
+ * turn it into a blob, open that. The object URL is revoked on a timer
+ * because revoking it immediately races the browser's PDF viewer. */
+function MeetingPlanLink({ requestId }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function open() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api.meetingPlan(requestId);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setError(body.detail || "Couldn't build the plan.");
+        return;
+      }
+      const url = URL.createObjectURL(await res.blob());
+      window.open(url, "_blank", "noopener");
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch {
+      setError("Couldn't reach the server.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <button className="bud-minor" onClick={open} disabled={busy}>
+        {busy ? "Finding places…" : "Where to meet →"}
+      </button>
+      {error && <p className="side-hint">{error}</p>}
+    </>
   );
 }
 

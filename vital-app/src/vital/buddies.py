@@ -97,15 +97,22 @@ def create_post(user_id: str, fields: dict) -> dict:
         raise ValueError(f"required fields are blank: {', '.join(blank)}")
     now = _now()
     with _conn() as c:
+        # Approximate coordinates, 2dp (~1.1km), from the browser. Coarse
+        # enough that it cannot identify a home, precise enough to rank
+        # venues fairly between two people. Never shown to anyone: only the
+        # DISTANCE it produces is, and only to the person it belongs to.
+        here = _approx_location()
         post_id = c.insert_id(
             """INSERT INTO activity_posts
                (user_id, display_name, activity, city, area, time_window, vibe,
-                skill_level, budget, group_size, notes, active, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                skill_level, budget, group_size, notes, active, created_at,
+                updated_at, lat, lng)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (user_id, clean["display_name"], clean["activity"], clean["city"],
              clean["area"], clean["time_window"], clean["vibe"], clean["skill_level"],
              clean["budget"], clean["group_size"], clean["notes"],
-             int(bool(fields.get("active", True))), now, now))
+             int(bool(fields.get("active", True))), now, now,
+             here[0], here[1]))
     return get_own_post(user_id, post_id)
 
 
@@ -256,6 +263,49 @@ def search_posts(user_id: str, activity: str | None = None, city: str | None = N
 
 # ---------- requests ----------
 
+def _approx_location() -> tuple[float | None, float | None]:
+    """The caller's coarse coordinates, or (None, None).
+
+    Rounded to 2dp here as well as in the browser. The browser rounding is
+    a courtesy; this one is the guarantee, because a modified client can
+    send whatever it likes and the promise made to the other person is that
+    nothing precise is ever stored.
+    """
+    from vital import storage
+
+    here = storage.current_location.get()
+    if not here:
+        return None, None
+    return round(float(here["lat"]), 2), round(float(here["lng"]), 2)
+
+
+def meeting_context(user_id: str, request_id: int) -> dict:
+    """Everything needed to build a meeting-point document.
+
+    Readable ONLY by the two people in the match, and only once the request
+    is accepted — a pending request must not leak the other person's
+    general area, since accepting is exactly the moment consent is given.
+    """
+    with _conn() as c:
+        row = c.execute(
+            """SELECT q.id, q.status, q.requester_user_id, q.requester_name,
+                      q.requester_lat, q.requester_lng,
+                      p.user_id AS owner_id, p.display_name AS owner_name,
+                      p.activity, p.city, p.area, p.lat, p.lng,
+                      p.time_window, p.vibe, p.skill_level, p.budget
+               FROM activity_requests q
+               JOIN activity_posts p ON p.id = q.post_id
+               WHERE q.id = ?""", (request_id,)).fetchone()
+    if row is None:
+        raise LookupError("request not found")
+    row = dict(row)
+    if user_id not in (row["owner_id"], row["requester_user_id"]):
+        raise PermissionError("not your match")
+    if row["status"] != "accepted":
+        raise ValueError("this request has not been accepted yet")
+    return row
+
+
 def create_request(user_id: str, post_id: int, message: str = "",
                    requester_name: str = "") -> dict:
     now = _now()
@@ -283,12 +333,14 @@ def create_request(user_id: str, post_id: int, message: str = "",
             "requester_user_id = ? AND status = 'pending'", (post_id, user_id)).fetchone()
         if dup:
             raise ValueError("you already have a pending request for this post")
+        here = _approx_location()
         req_id = c.insert_id(
             """INSERT INTO activity_requests
                (post_id, requester_user_id, requester_name, message, status,
-                created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)""",
+                created_at, updated_at, requester_lat, requester_lng)
+               VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?)""",
             (post_id, user_id, scrub_contact_info(requester_name) or "A VITAL member",
-             scrub_contact_info(message), now, now))
+             scrub_contact_info(message), now, now, here[0], here[1]))
     return {"id": req_id, "post_id": post_id, "status": "pending"}
 
 

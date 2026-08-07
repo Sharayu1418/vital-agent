@@ -5,7 +5,7 @@ import EnergyCurve from "./EnergyCurve";
 
 export default function Sidebar({
   threads, activeId, onSelect, onNew, onDelete, open, onClose,
-  memories, onForget, forecast, connections, onConnectionChanged,
+  memories, onForget, forecast, connections, onConnectionChanged, onUpload,
   authReady, authUser, authBusy, onSignIn, onSignOut,
 }) {
   return (
@@ -43,6 +43,25 @@ export default function Sidebar({
           <DeviceConnection key={c.provider} connection={c}
             onChanged={onConnectionChanged} />
         ))}
+
+        {/* The manual file route, deliberately quiet. It is still the ONLY
+            way Apple Watch data reaches VITAL — HealthKit has no server API
+            — so it cannot be removed, but it should not look like the
+            normal path either. A collapsed summary says both things. */}
+        {onUpload && (
+          <details className="upload-fallback">
+            <summary>Other ways to add sleep data</summary>
+            <p className="side-hint">
+              Apple Watch can’t sync automatically — Apple keeps that data on
+              your phone. Export from the Health app and drop the file here.
+            </p>
+            <label className="device-btn">
+              Choose a file
+              <input type="file" accept=".csv,.xml,.zip" hidden
+                onChange={(e) => e.target.files[0] && onUpload(e.target.files[0])} />
+            </label>
+          </details>
+        )}
 
         <section className="sidebar-memory" aria-labelledby="sidebar-memory-title">
           <div className="sidebar-memory-head">
