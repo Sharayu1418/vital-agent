@@ -19,3 +19,8 @@ docs/vital-review-teachings.md
 # live-eval output: a run artefact, not a source file
 crisis-live-eval.txt
 Dockerfile.backup
+
+# VAPID keypair from `vapid --gen`. private_key.pem is a signing key: it
+# lands in this directory by default and is one `git add -A` from being
+# published. The real copy belongs in Secret Manager.
+*.pem
