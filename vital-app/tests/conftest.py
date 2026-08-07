@@ -23,6 +23,55 @@ os.environ["AUTH_REQUIRED"] = "false"  # anonymous access in tests by default
 import pytest
 
 
+@pytest.fixture
+def live_project():
+    """Real GCP credentials for an opt-in live eval.
+
+    conftest pins GOOGLE_CLOUD_PROJECT to "test" at import time so the
+    offline suite can never reach a network. Any eval that wants a real
+    model has to undo that, and every one that forgot has failed the same
+    way: 403 on "resource project test".
+
+    The first crisis eval failed SILENTLY like this — every call 403'd, the
+    code fell back to keywords, and it reported 88.9% accuracy identical to
+    the keyword baseline. It was measuring its own fallback. So this fails
+    LOUDLY instead of proceeding: a live eval that cannot reach the model
+    must not produce a number.
+
+    Not autouse. Offline tests must keep the pinned value.
+    """
+    import pathlib
+
+    env_file = pathlib.Path(__file__).resolve().parent.parent / ".env"
+    values = {}
+    if env_file.exists():
+        for line in env_file.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, _, value = line.partition("=")
+                values[key.strip()] = value.strip().strip('"').strip("'")
+
+    project = values.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("LIVE_PROJECT")
+    if not project or project == "test":
+        pytest.fail(
+            "No real GOOGLE_CLOUD_PROJECT. Put it in vital-app/.env or export "
+            "LIVE_PROJECT. Refusing to run: an eval that cannot reach the "
+            "model would otherwise measure its own fallback and report it as "
+            "a result.")
+
+    previous = os.environ.get("GOOGLE_CLOUD_PROJECT")
+    os.environ["GOOGLE_CLOUD_PROJECT"] = project
+    if values.get("GOOGLE_CLOUD_LOCATION"):
+        os.environ["GOOGLE_CLOUD_LOCATION"] = values["GOOGLE_CLOUD_LOCATION"]
+
+    from vital.config import settings
+    settings.cache_clear()
+    yield project
+    if previous is not None:
+        os.environ["GOOGLE_CLOUD_PROJECT"] = previous
+    settings.cache_clear()
+
+
 @pytest.fixture(autouse=True)
 def offline_embeddings(monkeypatch):
     """Memory is semantic now (pgvector via LangGraph's store index), which

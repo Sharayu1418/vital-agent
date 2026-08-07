@@ -132,7 +132,7 @@ pytestmark_live = pytest.mark.skipif(
 
 
 @pytestmark_live
-def test_a_real_answer_names_only_what_the_tool_returned():
+def test_a_real_answer_names_only_what_the_tool_returned(live_project):
     """The behavioural check. Offline tests prove we could SEE a
     fabrication; this one asks whether there is one."""
     pytest.importorskip("langchain_google_vertexai")

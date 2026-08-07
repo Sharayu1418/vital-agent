@@ -152,7 +152,13 @@ def test_grading_failures_count_against_the_score():
 # ---------- the live run ----------
 
 @pytest.mark.skipif(not LIVE, reason="set ANSWER_QUALITY_EVAL=1")
-def test_answer_quality_meets_the_gate():
+def test_answer_quality_meets_the_gate(live_project):
+    """`live_project` undoes conftest's pinned GOOGLE_CLOUD_PROJECT.
+
+    Without it every call 403s on "resource project test" — which is how
+    the first crisis eval ended up scoring its own keyword fallback and
+    reporting it as a result.
+    """
     from langchain_core.messages import HumanMessage, SystemMessage
 
     from vital.agents.sleep_energy import SYSTEM_PROMPT
