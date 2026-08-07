@@ -865,6 +865,48 @@ def brief_preview(response: Response, ident: Identity = Depends()) -> dict:
                       "words": brief.word_count()}}
 
 
+@app.post("/brief/test")
+def brief_test(response: Response, ident: Identity = Depends()) -> dict:
+    """Send a push to the caller, right now.
+
+    Exists because the brief hour is restricted to mornings, so without
+    this the only way to check that notifications actually ARRIVE is to
+    wait until tomorrow — and delivery is the part most likely to be
+    broken, since it crosses the browser, the push service and VAPID
+    signing.
+
+    Sends only to the caller's own devices. There is no user parameter,
+    so it cannot be pointed at anybody else.
+    """
+    from vital import brief_job, push as push_mod
+
+    user_id, new_session = ident.resolve()
+    current_user_id.set(user_id)
+    _set_session(response, new_session)
+
+    if not push_mod.configured():
+        raise HTTPException(status_code=503, detail="push is not configured")
+    if not storage.push_subscriptions(user_id):
+        raise HTTPException(
+            status_code=409,
+            detail="No device registered yet — turn the brief on first.")
+
+    prefs = storage.get_prefs(user_id)
+    built = brief_job.build_for(user_id, storage.local_now(),
+                                name=prefs["display_name"] or "")
+    # Falls back to a fixed message when there is genuinely nothing to
+    # report: this is a DELIVERY check, and silence would leave you unable
+    # to tell "push is broken" from "quiet day".
+    title = built.title if built else "VITAL"
+    body = (built.body if built
+            else "Test notification — delivery is working. Real briefs only "
+                 "arrive when there's something worth saying.")
+
+    result = push_mod.send(user_id, title, body, url="/")
+    return {"sent": result.get("sent", 0), "removed": result.get("removed", 0),
+            "was_real_brief": built is not None}
+
+
 @app.post("/jobs/morning-brief")
 def morning_brief_job(x_job_token: str | None = Header(default=None)) -> dict:
     """Called hourly by Cloud Scheduler. NOT part of the user API.

@@ -108,6 +108,32 @@ export default function MorningBrief() {
     }
   }
 
+  /* Delivery check. The hour is restricted to mornings, so without this
+   * the only way to know notifications ARRIVE is to wait until tomorrow —
+   * and delivery is the part most likely to be broken, crossing the
+   * browser, the push service and VAPID signing. */
+  async function sendTest() {
+    setBusy(true);
+    setNote(null);
+    try {
+      const res = await api.briefTest();
+      const body = await res.json();
+      if (!res.ok) {
+        setNote(body.detail || "Couldn't send.");
+        return;
+      }
+      setNote(body.sent
+        ? (body.was_real_brief
+            ? "Sent — that's today's real brief."
+            : "Sent. Nothing to report today, so that was a delivery test.")
+        : "No device accepted it. Try turning the brief off and on again.");
+    } catch {
+      setNote("Couldn't reach the server.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function changeHour(hour) {
     setSettings((s) => ({ ...s, hour }));
     await api.saveBriefSettings({ enabled: settings.enabled, hour }).catch(() => {});
@@ -167,6 +193,9 @@ export default function MorningBrief() {
               ))}
             </select>
           </label>
+          <button className="device-btn" onClick={sendTest} disabled={busy}>
+            {busy ? "…" : "Send one now"}
+          </button>
           <button className="device-link" onClick={turnOff} disabled={busy}>
             Turn off
           </button>

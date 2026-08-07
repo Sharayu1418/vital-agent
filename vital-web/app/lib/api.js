@@ -157,6 +157,7 @@ export const api = {
     request("/brief/settings", { method: "POST", headers: json,
       body: JSON.stringify(payload) }),
   briefPreview: () => request("/brief/preview", { method: "POST" }),
+  briefTest: () => request("/brief/test", { method: "POST" }),
   briefSubscribe: (subscription) =>
     request("/brief/subscribe", { method: "POST", headers: json,
       body: JSON.stringify(subscription) }),
