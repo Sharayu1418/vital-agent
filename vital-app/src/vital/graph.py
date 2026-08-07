@@ -24,7 +24,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
-from vital import memory
+from vital import memory, storage
 from vital.agents import (activity_scout, idea_generator, people_connector,
                           sleep_energy)
 from vital.calendar import LocalCalendar
@@ -76,9 +76,28 @@ def _agent_node(agent, store):
         last_user = next((m.content for m in reversed(messages)
                           if getattr(m, "type", "") == "human"), "")
         facts = memory.recall(store, state["user_id"], str(last_user))
+        context = []
         if facts:
-            messages = [SystemMessage(content="Known about this user (use it, "
-                                      "don't re-ask): " + "; ".join(facts))] + messages
+            context.append("Known about this user (use it, don't re-ask): "
+                           + "; ".join(facts))
+
+        # Location LAST, and stated as authoritative, because it has to beat
+        # the memory line above. Memory legitimately holds "User is in
+        # Albany" from an earlier conversation; if they have since moved or
+        # travelled, the browser knows and the stored fact does not. The
+        # side panel used to show one city while the tools queried another,
+        # with nothing in the system able to notice the disagreement.
+        here = storage.current_location.get()
+        if here:
+            context.append(
+                f"The user's CURRENT location is {here['label']} "
+                f"(latitude {here['lat']}, longitude {here['lng']}). "
+                "This is live from their device and OVERRIDES any location "
+                "in the stored facts above. Use it for weather, venue and "
+                "event searches without asking them where they are.")
+
+        if context:
+            messages = [SystemMessage(content="\n\n".join(context))] + messages
         result = agent.invoke({"messages": messages})
         return Command(goto=END, update={"messages": [result["messages"][-1]]})
     return node

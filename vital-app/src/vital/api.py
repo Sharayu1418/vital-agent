@@ -71,7 +71,7 @@ app.add_middleware(
     # the preflight for every call — the app reports "can't reach the
     # backend" while the server is healthy and answering curl normally.
     allow_headers=["Authorization", "Content-Type", "X-Vital-Session",
-                   "X-UTC-Offset"],
+                   "X-UTC-Offset", "X-Geo-Lat", "X-Geo-Lng", "X-Geo-Label"],
     expose_headers=["X-Vital-Session"],
 )
 
@@ -108,6 +108,23 @@ def _set_session(response: Response, new_session: str | None) -> None:
         response.headers["X-Vital-Session"] = new_session
 
 
+def _decode_header(value: str | None) -> str | None:
+    """Percent-decode a header carrying free text.
+
+    Place names have accents, commas and spaces; HTTP headers are
+    latin-1 and cannot. The client encodes, the server decodes, and a
+    malformed value degrades to None rather than raising — a bad label
+    should cost you the city name, not the request.
+    """
+    if not value:
+        return None
+    from urllib.parse import unquote
+    try:
+        return unquote(value)
+    except Exception:
+        return None
+
+
 class Identity:
     """Dependency bundle: verified auth context + session transport
     (cookie OR mobile header). Every identity-resolving route uses this —
@@ -115,7 +132,10 @@ class Identity:
     def __init__(self, auth: AuthContext = Depends(authenticate),
                  vital_session: str | None = Cookie(default=None),
                  x_vital_session: str | None = Header(default=None),
-                 x_utc_offset: str | None = Header(default=None)):
+                 x_utc_offset: str | None = Header(default=None),
+                 x_geo_lat: str | None = Header(default=None),
+                 x_geo_lng: str | None = Header(default=None),
+                 x_geo_label: str | None = Header(default=None)):
         self.auth = auth
         self.session = vital_session or x_vital_session
         # Installed HERE rather than in middleware: BaseHTTPMiddleware runs
@@ -123,6 +143,11 @@ class Identity:
         # not reliably reach the handler — or the tools it calls. A
         # dependency resolves in the endpoint's own context.
         storage.set_utc_offset(x_utc_offset)
+        # Location travels with the request for the same reason the offset
+        # does: the server cannot know it, and the browser can. Sending it
+        # per request rather than storing it means moving cities is
+        # reflected immediately, with nothing to invalidate.
+        storage.set_location(x_geo_lat, x_geo_lng, _decode_header(x_geo_label))
 
     def resolve(self, req_user_id: str = "local-user") -> tuple[str, str | None]:
         return resolve_identity(req_user_id, self.auth, self.session)

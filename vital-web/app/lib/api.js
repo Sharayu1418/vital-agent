@@ -7,6 +7,8 @@
  * expired token racing its refresh), force-refresh once and retry once.
  * The `retried` flag makes an infinite loop impossible. */
 
+import { readGeo } from "./theme";
+
 const API = process.env.NEXT_PUBLIC_API_BASE;
 
 const json = { "Content-Type": "application/json" };
@@ -17,6 +19,25 @@ const json = { "Content-Type": "application/json" };
  * fetch. Downgrading a token failure to an anonymous call would hit the
  * backend under a different identity, which is never what the user meant. */
 let tokenProvider = null;
+
+/* Reads the saved location straight from storage on every request.
+ *
+ * Deliberately not held in a module variable or React state: the location
+ * picker, the device-geolocation prompt and a second browser tab can all
+ * change it, and a cached copy would keep sending the old city until a
+ * reload. Storage is the one place all three of them write to.
+ *
+ * readGeo is theme.js's — the same function the daylight theme uses. Two
+ * readers of one key is how the panel and the agents disagreed in the
+ * first place. */
+function currentGeo() {
+  if (typeof window === "undefined") return null;
+  try {
+    return readGeo(window.localStorage);
+  } catch {
+    return null;   // unreadable storage costs the city, not the request
+  }
+}
 
 export function setTokenProvider(fn) {
   tokenProvider = fn;
@@ -44,6 +65,20 @@ export async function request(path, options = {}, retried = false) {
    * minutes to SUBTRACT from local to reach UTC, so negate it. Read per
    * request, not once at load: laptops travel and DST happens. */
   headers["X-UTC-Offset"] = String(-new Date().getTimezoneOffset());
+  /* Location travels with the request too. It used to live only in
+   * localStorage, driving the theme and the side panel while never
+   * reaching the server — so the panel could say "New York" while the
+   * agent's tools queried Albany, which it had learned from an old
+   * conversation. Read fresh each time so changing it takes effect on the
+   * very next message with nothing to invalidate. */
+  const geo = currentGeo();
+  if (geo) {
+    headers["X-Geo-Lat"] = String(geo.lat);
+    headers["X-Geo-Lng"] = String(geo.lng);
+    // Headers are latin-1; place names are not. Encode, and let the
+    // server decode.
+    if (geo.label) headers["X-Geo-Label"] = encodeURIComponent(geo.label);
+  }
   const res = await fetch(`${API}${path}`, {
     credentials: "include", ...options, headers,
   });

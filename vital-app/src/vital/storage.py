@@ -25,6 +25,7 @@ migration 0001.
 user_id flows via a contextvar set per-request in api.py — tools are called
 by the LLM, which must never see or choose user identity.
 """
+import re
 import sqlite3
 from contextvars import ContextVar
 from datetime import date
@@ -60,6 +61,45 @@ def set_utc_offset(minutes) -> int:
     if not MIN_UTC_OFFSET <= value <= MAX_UTC_OFFSET:
         value = 0
     current_utc_offset_min.set(value)
+    return value
+
+
+# Where the user IS, right now, as the browser reports it.
+#
+# There used to be two answers to that question and they disagreed. The
+# location picker wrote to localStorage, which drove the daylight theme and
+# the side panel — and never reached the server. The agents learned the
+# user's city only from conversation, which memory then stored as a durable
+# fact. So the panel said "New York" while search_places queried Albany,
+# and nothing in the system could notice, because neither half knew the
+# other existed.
+#
+# This is now the single source of truth, and it beats memory: where someone
+# is today is a fact about today, not a stable trait.
+current_location: ContextVar[dict | None] = ContextVar(
+    "current_location", default=None)
+
+
+def set_location(lat, lng, label) -> dict | None:
+    """Validate and install the caller's location. Returns it, or None."""
+    try:
+        latitude, longitude = float(lat), float(lng)
+    except (TypeError, ValueError):
+        current_location.set(None)
+        return None
+    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+        current_location.set(None)
+        return None
+
+    text = str(label or "").strip()[:80]
+    # A label reaches an LLM prompt, so strip the characters used to fake
+    # instruction boundaries. Prompt injection via a place name is a real
+    # shape, and the geocoder is not the only thing that can set this.
+    text = re.sub(r"[\r\n<>{}\[\]]", " ", text).strip()
+
+    value = {"lat": round(latitude, 4), "lng": round(longitude, 4),
+             "label": text or f"{latitude:.2f}, {longitude:.2f}"}
+    current_location.set(value)
     return value
 
 
