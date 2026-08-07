@@ -134,6 +134,20 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
     last_sync_at TEXT, last_error TEXT,
     PRIMARY KEY (user_id, provider)
 );
+CREATE TABLE IF NOT EXISTS user_prefs (
+    user_id TEXT NOT NULL PRIMARY KEY,
+    brief_enabled INTEGER NOT NULL DEFAULT 0,   -- OFF until asked for
+    brief_hour INTEGER NOT NULL DEFAULT 7,      -- in the user's own clock
+    utc_offset_min INTEGER NOT NULL DEFAULT 0,  -- refreshed on every request
+    last_brief_date TEXT,                       -- idempotency: one per day
+    display_name TEXT, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+    user_id TEXT NOT NULL, endpoint TEXT NOT NULL,
+    p256dh TEXT NOT NULL, auth TEXT NOT NULL,
+    created_at TEXT NOT NULL, last_error TEXT,
+    PRIMARY KEY (user_id, endpoint)
+);
 CREATE TABLE IF NOT EXISTS interests (
     user_id TEXT, interest TEXT, PRIMARY KEY (user_id, interest)
 );
@@ -515,6 +529,98 @@ def save_health_rows(user_id: str, rows: list[dict]) -> int:
               str(r.get("quality") or ""), str(r.get("source") or "upload"))
              for r in rows])
     return len(rows)
+
+
+# ---------- morning brief preferences + push subscriptions ----------
+
+def get_prefs(user_id: str) -> dict:
+    with _conn() as c:
+        row = c.execute("SELECT * FROM user_prefs WHERE user_id = ?",
+                        (user_id,)).fetchone()
+    if row:
+        return dict(row)
+    return {"user_id": user_id, "brief_enabled": 0, "brief_hour": 7,
+            "utc_offset_min": 0, "last_brief_date": None, "display_name": None}
+
+
+def save_prefs(user_id: str, **fields) -> dict:
+    """Upsert. Only the named fields change, so touching the offset on every
+    request cannot silently re-enable a brief somebody turned off."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    current = get_prefs(user_id)
+    merged = {**current, **{k: v for k, v in fields.items() if v is not None}}
+    with _conn() as c:
+        c.execute(
+            """INSERT INTO user_prefs (user_id, brief_enabled, brief_hour,
+                   utc_offset_min, last_brief_date, display_name, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT (user_id) DO UPDATE SET
+                 brief_enabled = excluded.brief_enabled,
+                 brief_hour = excluded.brief_hour,
+                 utc_offset_min = excluded.utc_offset_min,
+                 last_brief_date = excluded.last_brief_date,
+                 display_name = excluded.display_name,
+                 updated_at = excluded.updated_at""",
+            (user_id, int(merged["brief_enabled"]), int(merged["brief_hour"]),
+             int(merged["utc_offset_min"]), merged["last_brief_date"],
+             merged["display_name"], now))
+    return get_prefs(user_id)
+
+
+def remember_offset(user_id: str) -> None:
+    """Persist the caller's timezone offset for the scheduled job.
+
+    The contextvar only exists for the length of a request; the brief runs
+    when nobody is here. Without this, "send at 7am" would mean 7am UTC for
+    everyone, which is 3am in New York.
+
+    Only ever writes for users who already have a row — creating one on
+    every anonymous request would fill the table with sessions that never
+    asked for anything.
+    """
+    offset = current_utc_offset_min.get()
+    with _conn() as c:
+        c.execute("UPDATE user_prefs SET utc_offset_min = ? WHERE user_id = ?",
+                  (int(offset), user_id))
+
+
+def brief_candidates() -> list[dict]:
+    """Everyone with the brief switched on. Filtering by local hour happens
+    in the job, which knows what time it is."""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM user_prefs WHERE brief_enabled = 1").fetchall()
+    return [dict(r) for r in rows]
+
+
+def save_push_subscription(user_id: str, endpoint: str, p256dh: str,
+                           auth: str) -> None:
+    from datetime import datetime, timezone
+    with _conn() as c:
+        c.execute(
+            """INSERT INTO push_subscriptions
+                 (user_id, endpoint, p256dh, auth, created_at, last_error)
+               VALUES (?, ?, ?, ?, ?, NULL)
+               ON CONFLICT (user_id, endpoint) DO UPDATE SET
+                 p256dh = excluded.p256dh, auth = excluded.auth,
+                 last_error = NULL""",
+            (user_id, endpoint[:500], p256dh, auth,
+             datetime.now(timezone.utc).isoformat()))
+
+
+def push_subscriptions(user_id: str) -> list[dict]:
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM push_subscriptions WHERE user_id = ?",
+            (user_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_push_subscription(user_id: str, endpoint: str) -> None:
+    with _conn() as c:
+        c.execute("DELETE FROM push_subscriptions WHERE user_id = ? AND "
+                  "endpoint = ?", (user_id, endpoint))
 
 
 # ---------- linked wearable accounts (OAuth) ----------

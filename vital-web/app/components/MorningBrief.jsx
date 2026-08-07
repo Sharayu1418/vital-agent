@@ -1,0 +1,161 @@
+"use client";
+import { useCallback, useEffect, useState } from "react";
+import { api } from "../lib/api";
+import {
+  currentEndpoint, disablePush, enablePush, needsHomeScreenInstall, pushSupported,
+} from "../lib/push";
+
+/* Morning brief opt-in.
+ *
+ * Two deliberate choices:
+ *
+ * 1. **Preview before permission.** You can see exactly what today's brief
+ *    would say before agreeing to receive one at 7am. Browsers permanently
+ *    block a site whose permission prompt is denied — there is no second
+ *    chance — so the prompt only appears after someone has decided they
+ *    want this.
+ *
+ * 2. **Off by default, and obvious how to leave.** A daily notification has
+ *    one chance to be welcome. The unsubscribe is a plain control, not
+ *    buried.
+ */
+export default function MorningBrief() {
+  const [settings, setSettings] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await api.briefSettings();
+      if (res.ok) setSettings(await res.json());
+    } catch { /* panel is decorative; chat still works */ }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  if (!settings?.available) return null;
+
+  const supported = pushSupported();
+  const needsInstall = needsHomeScreenInstall();
+
+  async function showPreview() {
+    setBusy(true);
+    setNote(null);
+    try {
+      const res = await api.briefPreview();
+      const body = await res.json();
+      setPreview(body.brief ? body.brief : { empty: body.reason });
+    } catch {
+      setNote("Couldn't build a preview.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function turnOn() {
+    setBusy(true);
+    setNote(null);
+    try {
+      const subscription = await enablePush(settings.vapid_public_key);
+      const sub = await api.briefSubscribe(subscription);
+      if (!sub.ok) throw new Error("Couldn't register this device.");
+      await api.saveBriefSettings({ enabled: true, hour: settings.hour ?? 7 });
+      setNote("On. You'll get one just after you usually wake up.");
+      await load();
+    } catch (err) {
+      setNote(err.message || "Couldn't turn notifications on.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function turnOff() {
+    setBusy(true);
+    setNote(null);
+    try {
+      const endpoint = await disablePush().catch(() => currentEndpoint());
+      if (endpoint) await api.briefUnsubscribe(endpoint);
+      await api.saveBriefSettings({ enabled: false, hour: settings.hour ?? 7 });
+      setNote("Off. Nothing will be sent.");
+      await load();
+    } catch {
+      setNote("Couldn't turn it off — try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function changeHour(hour) {
+    setSettings((s) => ({ ...s, hour }));
+    await api.saveBriefSettings({ enabled: settings.enabled, hour }).catch(() => {});
+  }
+
+  return (
+    <section className="sidebar-brief" aria-labelledby="brief-title">
+      <div className="sidebar-memory-head">
+        <h2 id="brief-title">Morning brief</h2>
+        {settings.enabled && <span className="device-sync">on</span>}
+      </div>
+
+      {!settings.enabled ? (
+        <p className="side-hint">
+          One notification a day: how you slept, when you’ll be sharpest, and
+          one thing worth changing. Nothing else.
+        </p>
+      ) : (
+        <p className="side-hint">
+          Arriving at {String(settings.hour).padStart(2, "0")}:00, on{" "}
+          {settings.devices} {settings.devices === 1 ? "device" : "devices"}.
+        </p>
+      )}
+
+      {preview && (
+        <div className="brief-preview">
+          {preview.empty ? (
+            <p className="side-hint">{preview.empty}</p>
+          ) : (
+            <>
+              <strong>{preview.title}</strong>
+              <p>{preview.body}</p>
+            </>
+          )}
+        </div>
+      )}
+
+      <button className="device-btn" onClick={showPreview} disabled={busy}>
+        {busy ? "…" : "Show today’s brief"}
+      </button>
+
+      {!supported ? (
+        <p className="side-hint">This browser can’t show notifications.</p>
+      ) : needsInstall ? (
+        <p className="side-hint">
+          On iPhone, add VITAL to your home screen first — Safari only
+          delivers notifications to installed apps.
+        </p>
+      ) : settings.enabled ? (
+        <>
+          <label className="brief-hour">
+            Send at
+            <select value={settings.hour}
+              onChange={(e) => changeHour(Number(e.target.value))}>
+              {[5, 6, 7, 8, 9, 10].map((h) => (
+                <option key={h} value={h}>{String(h).padStart(2, "0")}:00</option>
+              ))}
+            </select>
+          </label>
+          <button className="device-link" onClick={turnOff} disabled={busy}>
+            Turn off
+          </button>
+        </>
+      ) : (
+        <button className="device-btn" onClick={turnOn} disabled={busy}>
+          {busy ? "…" : "Send it each morning"}
+        </button>
+      )}
+
+      {note && <p className="side-hint" role="status">{note}</p>}
+    </section>
+  );
+}

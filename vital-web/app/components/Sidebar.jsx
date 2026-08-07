@@ -2,6 +2,7 @@
 import { accountLabel } from "../lib/auth";
 import DeviceConnection from "./DeviceConnection";
 import EnergyCurve from "./EnergyCurve";
+import MorningBrief from "./MorningBrief";
 
 export default function Sidebar({
   threads, activeId, onSelect, onNew, onDelete, open, onClose,
@@ -38,6 +39,8 @@ export default function Sidebar({
         </div>
 
         <EnergyCurve forecast={forecast} />
+
+        <MorningBrief />
 
         {connections?.map((c) => (
           <DeviceConnection key={c.provider} connection={c}

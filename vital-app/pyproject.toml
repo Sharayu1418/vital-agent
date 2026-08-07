@@ -20,6 +20,9 @@ dependencies = [
     # it starts instantly on Cloud Run — a headless-browser renderer would
     # mean shipping Chromium to lay out one page of text.
     "fpdf2>=2.8",
+    # Morning brief delivery. Web Push means a VAPID JWT plus AES128GCM
+    # payload encryption — not something to hand-roll for a notification.
+    "pywebpush>=2.0",
 ]
 
 [project.optional-dependencies]

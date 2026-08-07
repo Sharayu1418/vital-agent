@@ -776,6 +776,121 @@ def _sync_wearable_later(user_id: str) -> None:
         pass
 
 
+# ---------- morning brief ----------
+
+class BriefPrefs(BaseModel):
+    enabled: bool
+    hour: int = Field(default=7, ge=0, le=23)
+    display_name: str = Field(default="", max_length=40)
+
+
+class PushSubscription(BaseModel):
+    endpoint: str = Field(min_length=10, max_length=500)
+    p256dh: str = Field(min_length=10, max_length=200)
+    auth: str = Field(min_length=4, max_length=100)
+
+
+@app.get("/brief/settings")
+def brief_settings(response: Response, ident: Identity = Depends()) -> dict:
+    from vital import push as push_mod
+
+    user_id, new_session = ident.resolve()
+    _set_session(response, new_session)
+    prefs = storage.get_prefs(user_id)
+    return {
+        "available": push_mod.configured(),
+        "enabled": bool(prefs["brief_enabled"]),
+        "hour": prefs["brief_hour"],
+        "display_name": prefs["display_name"] or "",
+        "devices": len(storage.push_subscriptions(user_id)),
+        # The browser needs this to subscribe. Public by design.
+        "vapid_public_key": push_mod.public_key(),
+    }
+
+
+@app.post("/brief/settings")
+def save_brief_settings(req: BriefPrefs, response: Response,
+                        ident: Identity = Depends()) -> dict:
+    user_id, new_session = ident.resolve()
+    _set_session(response, new_session)
+    prefs = storage.save_prefs(
+        user_id, brief_enabled=int(req.enabled), brief_hour=req.hour,
+        display_name=req.display_name or None,
+        # Capture the offset at the moment they opt in: the job runs when
+        # nobody is here, so "7am" is unresolvable without it.
+        utc_offset_min=storage.current_utc_offset_min.get())
+    metrics.log_tool(user_id, "brief:settings", "ok")
+    return {"enabled": bool(prefs["brief_enabled"]), "hour": prefs["brief_hour"]}
+
+
+@app.post("/brief/subscribe")
+def brief_subscribe(req: PushSubscription, response: Response,
+                    ident: Identity = Depends()) -> dict:
+    user_id, new_session = ident.resolve()
+    _set_session(response, new_session)
+    storage.save_push_subscription(user_id, req.endpoint, req.p256dh, req.auth)
+    return {"subscribed": True}
+
+
+@app.delete("/brief/subscribe")
+def brief_unsubscribe(endpoint: str, response: Response,
+                      ident: Identity = Depends()) -> dict:
+    user_id, new_session = ident.resolve()
+    _set_session(response, new_session)
+    storage.delete_push_subscription(user_id, endpoint)
+    return {"unsubscribed": True}
+
+
+@app.post("/brief/preview")
+def brief_preview(response: Response, ident: Identity = Depends()) -> dict:
+    """What today's brief would say, without sending anything.
+
+    Exists so somebody can judge the content before agreeing to receive it
+    at 7am — and so the copy can be checked in production without waiting
+    for a schedule.
+    """
+    from vital import brief_job
+
+    user_id, new_session = ident.resolve()
+    current_user_id.set(user_id)
+    _set_session(response, new_session)
+    prefs = storage.get_prefs(user_id)
+    brief = brief_job.build_for(user_id, storage.local_now(),
+                                name=prefs["display_name"] or "")
+    if brief is None:
+        return {"brief": None,
+                "reason": "Nothing worth saying today — that's a real answer, "
+                          "and you wouldn't have been notified."}
+    return {"brief": {"title": brief.title, "body": brief.body,
+                      "words": brief.word_count()}}
+
+
+@app.post("/jobs/morning-brief")
+def morning_brief_job(x_job_token: str | None = Header(default=None)) -> dict:
+    """Called hourly by Cloud Scheduler. NOT part of the user API.
+
+    Guarded by a shared secret compared in constant time. A URL that makes
+    the app notify every one of its users is not something to leave open,
+    and an unguarded one would also be a free way to drain the push quota.
+
+    Deliberately not behind Identity: there is no user here, and reusing the
+    session machinery would invite someone to reach it with a cookie.
+    """
+    import secrets as stdlib_secrets
+
+    from vital import brief_job
+
+    expected = settings().brief_job_token
+    if not expected:
+        raise HTTPException(status_code=503,
+                            detail="brief job is not configured")
+    if not x_job_token or not stdlib_secrets.compare_digest(x_job_token,
+                                                            expected):
+        raise HTTPException(status_code=401, detail="not authorised")
+
+    return brief_job.run()
+
+
 # ---------- wearable connections (Google Health / Fitbit) ----------
 #
 # Same rule as commit_plan: identity is NEVER taken from the request. The

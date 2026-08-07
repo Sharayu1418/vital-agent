@@ -151,6 +151,19 @@ export const api = {
   meetingPlan: (requestId) =>
     request(`/activity-requests/${requestId}/meeting.pdf`),
 
+  // ---- morning brief ----
+  briefSettings: () => request("/brief/settings"),
+  saveBriefSettings: (payload) =>
+    request("/brief/settings", { method: "POST", headers: json,
+      body: JSON.stringify(payload) }),
+  briefPreview: () => request("/brief/preview", { method: "POST" }),
+  briefSubscribe: (subscription) =>
+    request("/brief/subscribe", { method: "POST", headers: json,
+      body: JSON.stringify(subscription) }),
+  briefUnsubscribe: (endpoint) =>
+    request(`/brief/subscribe?endpoint=${encodeURIComponent(endpoint)}`,
+      { method: "DELETE" }),
+
   // ---- wearable connections ----
   connections: () => request("/connections"),
   connectStart: (provider) => request(`/connect/${provider}`),

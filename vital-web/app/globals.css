@@ -225,6 +225,27 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 }
 .device-link:disabled { opacity: 0.55; cursor: default; }
 
+/* ---- Morning brief ---- */
+.sidebar-brief {
+  flex: 0 0 auto; padding: 10px 4px;
+  border-top: 1px solid var(--glass-border);
+}
+.brief-preview {
+  margin: 6px 0; padding: 8px 10px; border-radius: 8px;
+  background: var(--glass-strong); font-size: 12px; line-height: 1.5;
+}
+.brief-preview strong { display: block; margin-bottom: 3px; font-size: 11.5px; }
+.brief-preview p { margin: 0; color: var(--muted); }
+.brief-hour {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; margin-top: 6px; padding: 0 2px;
+  color: var(--muted); font-size: 11.5px;
+}
+.brief-hour select {
+  background: var(--glass-strong); color: inherit; font-size: 11.5px;
+  border: 1px solid var(--glass-border); border-radius: 6px; padding: 3px 6px;
+}
+
 .upload-fallback { padding: 0 4px 10px; }
 .upload-fallback > summary {
   color: var(--muted); font-size: 11.5px; cursor: pointer;

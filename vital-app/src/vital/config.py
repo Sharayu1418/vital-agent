@@ -121,6 +121,20 @@ class Settings(BaseSettings):
     # it the connect route refuses rather than storing bearer credentials to
     # a third party's health data in plaintext.
     token_encryption_key: str | None = None
+    # --- Morning brief (web push) ---
+    # VAPID keypair identifying this server to the browser push services.
+    # The PUBLIC key ships to the browser by design; the private one is a
+    # signing key and belongs in Secret Manager. Generate with:
+    #   vapid --gen   (from the py-vapid package)
+    vapid_public_key: str | None = None
+    vapid_private_key: str | None = None
+    # A mailto: the push service can contact about your traffic. Required
+    # by the VAPID spec; a real address, not a placeholder.
+    vapid_subject: str | None = None
+    # Shared secret proving a brief job request came from Cloud Scheduler.
+    # A URL that makes an app notify all its users must never be open.
+    brief_job_token: str | None = None
+
     # How stale synced sleep data may be before /forecast refreshes it.
     # Wearables post last night's sleep once, in the morning; polling harder
     # spends rate limit for nothing.
