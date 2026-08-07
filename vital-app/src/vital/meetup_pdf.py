@@ -43,19 +43,19 @@ def build(activity: str, a: Person, b: Person, suggestions: list[Suggestion],
     # --- header ---
     pdf.set_font("Helvetica", "B", 20)
     pdf.set_text_color(*TEXT)
-    pdf.multi_cell(width, 9, f"{activity.strip().title()} — where to meet")
+    _write(pdf, width, 9, f"{activity.strip().title()} — where to meet")
 
     pdf.set_font("Helvetica", "", 10)
     pdf.set_text_color(*MUTED)
-    pdf.multi_cell(width, 5.5,
-                   f"{a.label} and {b.label}"
-                   + (f"  ·  {generated}" if generated else ""))
+    _write(pdf, width, 5.5,
+           f"{a.label} and {b.label}"
+           + (f"  ·  {generated}" if generated else ""))
     pdf.ln(2)
     pdf.set_font("Helvetica", "", 9.5)
-    pdf.multi_cell(width, 5,
-                   "Ranked so neither of you does all the travelling. "
-                   "Distances are straight-line from each of your general "
-                   "areas, not door-to-door travel time.")
+    _write(pdf, width, 5,
+           "Ranked so neither of you does all the travelling. "
+           "Distances are straight-line from each of your general "
+           "areas, not door-to-door travel time.")
     pdf.ln(3)
     _rule(pdf, width)
 
@@ -63,11 +63,11 @@ def build(activity: str, a: Person, b: Person, suggestions: list[Suggestion],
         pdf.ln(4)
         pdf.set_font("Helvetica", "", 11)
         pdf.set_text_color(*TEXT)
-        pdf.multi_cell(width, 6,
-                       "No venue came out as a fair meeting point this time. "
-                       "You are probably far enough apart that it is worth "
-                       "agreeing a neighbourhood between you first, then "
-                       "searching there.")
+        _write(pdf, width, 6,
+               "No venue came out as a fair meeting point this time. "
+               "You are probably far enough apart that it is worth "
+               "agreeing a neighbourhood between you first, then "
+               "searching there.")
         return _out(pdf)
 
     for index, suggestion in enumerate(suggestions, start=1):
@@ -79,15 +79,15 @@ def build(activity: str, a: Person, b: Person, suggestions: list[Suggestion],
         pdf.ln(3)
         pdf.set_font("Helvetica", "I", 9)
         pdf.set_text_color(*MUTED)
-        pdf.multi_cell(width, 5, footnote)
+        _write(pdf, width, 5, footnote)
 
     pdf.ln(4)
     pdf.set_font("Helvetica", "", 8.5)
     pdf.set_text_color(*MUTED)
-    pdf.multi_cell(width, 4.5,
-                   "Neither of you can see the other's location — only how "
-                   "far each venue is from your general area. Check opening "
-                   "hours before you go.")
+    _write(pdf, width, 4.5,
+           "Neither of you can see the other's location — only how "
+           "far each venue is from your general area. Check opening "
+           "hours before you go.")
     return _out(pdf)
 
 
@@ -98,32 +98,43 @@ def _entry(pdf, width, index: int, s: Suggestion, a: Person, b: Person) -> None:
     line = f"{index}.  {s.venue.name}"
     if s.venue.rating is not None:
         line += f"   {s.venue.rating:.1f}*"
-    pdf.multi_cell(width, 6.5, _ascii(line))
+    _write(pdf, width, 6.5, line)
 
     if s.venue.address:
         pdf.set_font("Helvetica", "", 9.5)
         pdf.set_text_color(*MUTED)
-        pdf.multi_cell(width, 5, _ascii(s.venue.address))
+        _write(pdf, width, 5, s.venue.address)
 
     # The two numbers that decide it, given equal visual weight.
     pdf.ln(1)
     pdf.set_font("Helvetica", "B", 10)
     pdf.set_text_color(*TEXT)
-    pdf.multi_cell(width, 5.5,
-                   _ascii(f"{a.label}: {s.km_a:.1f} km      "
-                          f"{b.label}: {s.km_b:.1f} km"))
+    _write(pdf, width, 5.5,
+           f"{a.label}: {s.km_a:.1f} km      {b.label}: {s.km_b:.1f} km")
 
     pdf.set_font("Helvetica", "", 10)
     pdf.set_text_color(*TEXT)
     for reason in s.reasons:
-        pdf.multi_cell(width, 5.2, _ascii(f"  -  {reason}"))
+        _write(pdf, width, 5.2, f"  -  {reason}")
 
     pdf.ln(1)
     pdf.set_font("Helvetica", "I", 9.5)
     pdf.set_text_color(*MUTED)
-    pdf.multi_cell(width, 5, _ascii(f"Tradeoff: {s.tradeoff}"))
+    _write(pdf, width, 5, f"Tradeoff: {s.tradeoff}")
     pdf.ln(2)
     _rule(pdf, width)
+
+
+def _write(pdf, width, height, text: str) -> None:
+    """The ONLY way text enters this document.
+
+    _ascii existed from the start and was applied to the venue fields but
+    not to the headings — which raised on the em dash in this file's own
+    title, not on user data at all. Routing every write through one
+    function makes "remember to transliterate" impossible to get wrong,
+    which is the only kind of rule that survives.
+    """
+    pdf.multi_cell(width, height, _ascii(text))
 
 
 def _rule(pdf, width) -> None:

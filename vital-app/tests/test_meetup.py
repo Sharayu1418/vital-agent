@@ -162,6 +162,25 @@ def test_the_document_never_contains_coordinates():
         assert leak not in body, f"the PDF leaks the coordinate {leak}"
 
 
+def test_all_text_goes_through_the_transliterating_writer():
+    """Structural, because the behavioural version already failed once.
+
+    _ascii existed and was applied to the venue fields but not to the
+    headings, so the document raised on an em dash in ITS OWN TITLE — not
+    on user data at all. Checking the outcome catches that after the fact;
+    checking that there is only one way in stops it recurring.
+    """
+    import pathlib
+    import re
+
+    source = (pathlib.Path(__file__).resolve().parent.parent
+              / "src" / "vital" / "meetup_pdf.py").read_text()
+    calls = re.findall(r"^\s*(?:pdf\.)?multi_cell\(", source, re.M)
+    assert len(calls) == 1, (
+        f"{len(calls)} multi_cell calls — every one must go through _write, "
+        "or somebody will forget to transliterate exactly one of them again")
+
+
 def test_the_document_renders_with_awkward_characters():
     """fpdf2's built-in fonts are latin-1. One Portuguese cafe with a curly
     apostrophe would otherwise raise mid-render and 500 the whole
