@@ -52,20 +52,23 @@ self.addEventListener("notificationclick", (event) => {
   );
 });
 
-/* Push services rotate subscriptions without warning. Without this the
-   subscription silently dies and the brief stops arriving with nothing to
-   see — the failure mode this whole feature is most vulnerable to. */
+/* Push services rotate subscriptions without warning.
+ *
+ * This re-subscribes with the browser but deliberately does NOT tell the
+ * server: the service worker is served from the Vercel origin and the API
+ * lives on Cloud Run, so a relative fetch here would hit the wrong host and
+ * fail silently — a dead notification path that looks like a working one,
+ * which is the exact failure this feature is most vulnerable to.
+ *
+ * Instead the app re-registers the current subscription every time the
+ * brief panel loads. The upsert is keyed on the endpoint, so it is free
+ * when nothing has changed and self-healing when it has. Worst case the
+ * user misses briefs until they next open VITAL, which is also the moment
+ * they would notice. */
 self.addEventListener("pushsubscriptionchange", (event) => {
   event.waitUntil(
     self.registration.pushManager
       .subscribe(event.oldSubscription?.options)
-      .then((subscription) =>
-        fetch("/brief/resubscribe", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(subscription),
-        }).catch(() => {})
-      )
       .catch(() => {})
   );
 });

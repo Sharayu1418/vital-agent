@@ -28,7 +28,29 @@ export default function MorningBrief() {
   const load = useCallback(async () => {
     try {
       const res = await api.briefSettings();
-      if (res.ok) setSettings(await res.json());
+      if (!res.ok) return;
+      const body = await res.json();
+      setSettings(body);
+
+      /* Self-heal a rotated subscription. Push services replace
+       * subscriptions without warning, and the service worker cannot tell
+       * the server itself — it is served from a different origin than the
+       * API. Re-registering here is an upsert keyed on the endpoint, so it
+       * costs nothing when nothing has changed and quietly repairs the
+       * notification path when it has. Without it the brief stops arriving
+       * with no error anywhere. */
+      if (body.enabled) {
+        const registration = await navigator.serviceWorker?.getRegistration();
+        const subscription = await registration?.pushManager?.getSubscription();
+        if (subscription) {
+          const json = subscription.toJSON();
+          await api.briefSubscribe({
+            endpoint: json.endpoint,
+            p256dh: json.keys?.p256dh,
+            auth: json.keys?.auth,
+          }).catch(() => {});
+        }
+      }
     } catch { /* panel is decorative; chat still works */ }
   }, []);
 
