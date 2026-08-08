@@ -151,6 +151,77 @@ def test_grading_failures_count_against_the_score():
 
 # ---------- the live run ----------
 
+def build_agent_with_stub_tools(llm, case):
+    """The REAL agent, with its real prompt, and tools returning fixtures.
+
+    The first version of this eval called the bare model with just a system
+    prompt — no tools at all. So a case asking for a specific clock time
+    was grading the model on information it had no way to obtain, and the
+    score measured a strawman rather than the product.
+
+    That is the same mistake as the memory thresholds and the CORS header:
+    the harness doing something production does not.
+
+    Tools are STUBBED rather than live, deliberately. Real Places and
+    weather calls would make the score depend on the weather, cost money
+    per run, and make a regression indistinguishable from a quiet Tuesday.
+    Fixed fixtures mean a score change is a change in VITAL.
+    """
+    from langchain_core.tools import tool
+    from langgraph.prebuilt import create_react_agent
+
+    fixtures = case.get("tools", {})
+
+    @tool
+    def forecast_energy(horizon_hours: int = 24) -> dict:
+        """Predict the user's energy over the next 24-72 hours."""
+        return fixtures.get("forecast_energy", {
+            "confidence": 0.85,
+            "basis": "14 nights, 14 with logged wake times",
+            "peak": {"at": "Thu 10:40", "energy": 0.86,
+                     "why": ["circadian rhythm working in your favour"]},
+            "dip": {"at": "Thu 15:30", "energy": 0.64,
+                    "why": ["afternoon circadian dip"]},
+            "sleep_debt_hours": 2.0, "last_night_deficit_hours": 1.5,
+            "typical_wake": "07:00", "typical_bedtime": "23:00",
+        })
+
+    @tool
+    def get_sleep_history(days: int = 14) -> list:
+        """Fetch the user's recent sleep logs."""
+        return fixtures.get("get_sleep_history",
+                            [{"log_date": "2026-08-06", "duration_min": 390}])
+
+    @tool
+    def search_places(query: str, city: str, max_results: int = 5) -> dict:
+        """Search for real venues. Render each as a MARKDOWN LINK."""
+        return fixtures.get("search_places", {"venues": [
+            {"name": "The Court Club", "rating": 4.5,
+             "address": "1 Main St", "maps_url": "https://maps.google.com/?cid=1",
+             "price_level": None},
+        ]})
+
+    @tool
+    def search_events(city: str) -> dict:
+        """Upcoming ticketed events near a city."""
+        return fixtures.get("search_events", {"events": []})
+
+    return create_react_agent(
+        llm,
+        tools=[forecast_energy, get_sleep_history, search_places, search_events],
+        prompt=case.get("prompt") or _prompt_for(case))
+
+
+def _prompt_for(case):
+    """The real system prompt of whichever agent would handle this."""
+    from vital.agents.activity_scout import SYSTEM_PROMPT as SCOUT
+    from vital.agents.sleep_energy import SYSTEM_PROMPT as SLEEP
+
+    prompt = SCOUT if case.get("agent") == "activity_scout" else SLEEP
+    context = case.get("context", "")
+    return prompt + (f"\n\nContext for this turn: {context}" if context else "")
+
+
 @pytest.mark.skipif(not LIVE, reason="set ANSWER_QUALITY_EVAL=1")
 def test_answer_quality_meets_the_gate(live_project):
     """`live_project` undoes conftest's pinned GOOGLE_CLOUD_PROJECT.
@@ -159,29 +230,35 @@ def test_answer_quality_meets_the_gate(live_project):
     the first crisis eval ended up scoring its own keyword fallback and
     reporting it as a result.
     """
-    from langchain_core.messages import HumanMessage, SystemMessage
-
-    from vital.agents.sleep_energy import SYSTEM_PROMPT
+    from langchain_core.messages import HumanMessage
 
     llm = _grader()
     total = passed = 0
     failures = []
 
     for case in CASES:
-        context = case.get("context", "")
-        answer = llm.invoke([
-            SystemMessage(content=SYSTEM_PROMPT
-                          + (f"\n\nContext: {context}" if context else "")),
-            HumanMessage(content=case["message"]),
-        ]).content
+        agent = build_agent_with_stub_tools(llm, case)
+        result = agent.invoke(
+            {"messages": [HumanMessage(content=case["message"])]})
+        answer = str(result["messages"][-1].content)
+
+        used = {call.get("name")
+                for message in result["messages"]
+                for call in (getattr(message, "tool_calls", None) or [])}
+        for required in case.get("must_use", []):
+            total += 1
+            if required in used:
+                passed += 1
+            else:
+                failures.append(f"{case['id']}: never called {required}")
 
         for question in case["rubric"]:
             total += 1
-            ok, why = grade(llm, case["message"], str(answer), question)
+            ok, why = grade(llm, case["message"], answer, question)
             if ok:
                 passed += 1
             else:
-                failures.append(f"{case['id']}: {question[:60]}… — {why}")
+                failures.append(f"{case['id']}: {question[:64]}… — {why}")
 
     score = passed / total if total else 0.0
     print(f"\n  answer quality: {passed}/{total} = {score:.0%}  (gate {GATE:.0%})")
