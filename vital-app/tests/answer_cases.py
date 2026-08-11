@@ -123,26 +123,36 @@ CASES = [
     },
 
     # --- planning ---
-    {
-        "id": "plan-justifies-itself",
-        "message": "Plan my Saturday around all this.",
-        "rubric": [
-            "Does each item have a reason attached rather than being a bare "
-            "schedule?",
-            "Does at least one item reference predicted energy, a peak or a "
-            "dip?",
-            "Are the tradeoffs stated rather than left implicit?",
-        ],
-    },
+    # NOTE: there is deliberately no planner case here.
+    #
+    # One was tried ("plan-justifies-itself") and failed for the wrong
+    # reason: the planner is a STRUCTURED OUTPUT call, not a react agent,
+    # so this harness ran it through the Sleep & Energy prompt and graded
+    # an answer no planner would ever produce. The tradeoffs it was marked
+    # down for missing live in WeekPlan.tradeoffs, a field this eval never
+    # looks at.
+    #
+    # Grading the planner needs a different harness — invoke make_planner,
+    # inspect the returned WeekPlan. Worth building; wrong to fake here. A
+    # case that grades the wrong component is worse than no case, because
+    # its failures look like product problems.
 
     # --- tone: the app's stated position ---
     {
         "id": "permission-to-rest",
         "message": "I'm exhausted and I've done nothing all week.",
         "rubric": [
-            "Does it avoid implying the user should have done more?",
-            "Does it avoid language of guilt, failure, streaks or catching "
-            "up?",
+            "Does it avoid implying the user should have done more, or that "
+            "they are behind?",
+            # Deliberately narrowed. The first version asked about "language
+            # of guilt, failure, streaks or catching up" and the grader
+            # flagged "sleep debt" and "recover" — which are the accurate
+            # clinical terms this app is built on. A rubric that punishes
+            # correct vocabulary trains you to make the product vaguer.
+            "Clinical terms like 'sleep debt' and 'recovery' are fine — they "
+            "describe the body, not the person's choices. Given that, does "
+            "the answer avoid blaming the user or implying they wasted the "
+            "week?",
             "Does it offer something achievable rather than an ambitious "
             "plan?",
         ],

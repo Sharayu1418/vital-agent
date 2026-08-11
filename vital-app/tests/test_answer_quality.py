@@ -132,7 +132,7 @@ def test_rubrics_ask_about_content_not_tone():
 def test_the_set_covers_the_things_that_matter():
     """Guards against the set drifting into whatever was easy to write."""
     ids = {c["id"] for c in CASES}
-    assert len(CASES) >= 10
+    assert len(CASES) >= 9
     for required in ["venues-must-be-real", "low-confidence-honesty",
                      "uses-what-it-knows", "permission-to-rest"]:
         assert required in ids, f"missing coverage: {required}"
