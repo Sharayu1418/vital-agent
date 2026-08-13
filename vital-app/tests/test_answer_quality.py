@@ -206,9 +206,24 @@ def build_agent_with_stub_tools(llm, case):
         """Upcoming ticketed events near a city."""
         return fixtures.get("search_events", {"events": []})
 
+    @tool
+    def get_weather(city: str) -> dict:
+        """Current weather and 12-hour precipitation outlook for a city."""
+        return fixtures.get("get_weather", {
+            "city": city, "temp_c": 19, "condition": "clear",
+            "rain_next_12h": False,
+        })
+
+    # EVERY tool the real agents have. Omitting one is not a smaller test,
+    # it is a different one: Activity Scout's prompt says to ALWAYS call
+    # get_weather, so without a stub the agent hits a missing tool and goes
+    # off-script — which showed up as "never called search_places" and "it
+    # did not answer the weather question", two failures that looked like
+    # product problems and were mine.
     return create_react_agent(
         llm,
-        tools=[forecast_energy, get_sleep_history, search_places, search_events],
+        tools=[forecast_energy, get_sleep_history, search_places,
+               search_events, get_weather],
         prompt=case.get("prompt") or _prompt_for(case))
 
 

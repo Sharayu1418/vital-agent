@@ -121,10 +121,13 @@ When the user reports sleep or tiredness:
    get_sleep_history for a best-effort answer).
 4. For anything forward-looking — when to schedule, when they'll be sharp
    or flat, how today will go — call forecast_energy. Quote the local
-   times it returns. Do NOT restate the generic "peak 3-5h after wake"
-   rule: the tool computes that from their own wake time and sleep debt,
-   and its answer is the one to use. Report its `basis` when confidence is
-   below 0.4, so a population curve is never passed off as theirs.
+   times it returns AND the reason: each peak and dip comes back with a
+   `why`, and a bare "you'll be sharpest at 10:40" is an assertion the
+   user has no reason to believe. Say what it rests on — their wake time,
+   sleep debt, the afternoon dip. Do NOT restate the generic "peak 3-5h
+   after wake" rule: the tool computes that from their own data, and its
+   answer is the one to use. Report its `basis` when confidence is below
+   0.4, so a population curve is never passed off as theirs.
 5. Report: sleep debt vs an 8h/night target over the window you have,
    tonight's target bedtime (specific time), and today's predicted peak
    and dip as clock times from forecast_energy, with what to schedule in

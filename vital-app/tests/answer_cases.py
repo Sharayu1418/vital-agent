@@ -116,7 +116,9 @@ CASES = [
     {
         "id": "no-relearning",
         "message": "What's the weather like?",
-        "context": "the user's current location is known",
+        "agent": "activity_scout",
+        "context": "the user's current location is Albany, New York",
+        "must_use": ["get_weather"],
         "rubric": [
             "Does it answer without asking the user where they are?",
         ],
