@@ -23,6 +23,22 @@ money, and is exactly as flaky as anything talking to a hosted model. A CI
 job that goes red for reasons nobody controls gets ignored, and then it
 protects nothing.
 
+READ THE SCORE, NOT THE FAILURE LIST
+------------------------------------
+Runs 2 and 3 both scored 88% with DIFFERENT failures, and nothing had
+changed between them that could explain the difference. `tool-down-honesty`
+passed in one and failed in the next.
+
+That is real: a tool-calling agent is not deterministic even at
+temperature 0, because it chooses how many tools to call and in what
+order. The noise floor is roughly two or three items out of twenty-six.
+
+So: a sustained drop across runs is a regression worth chasing. A single
+case flipping is not, and chasing it means editing prompts to fix noise —
+which is how a suite of tests becomes a suite of superstitions. If one
+case matters enough to be certain about, give it its own deterministic
+test rather than tightening the rubric until it stops flickering.
+
 THE LIMITS, STATED
 ------------------
 A model grading a model is a proxy, not truth. It is used because the
@@ -228,13 +244,40 @@ def build_agent_with_stub_tools(llm, case):
 
 
 def _prompt_for(case):
-    """The real system prompt of whichever agent would handle this."""
+    """The real system prompt, plus context injected the way _agent_node
+    injects it.
+
+    The first version appended "Context for this turn: memory holds: user
+    is into pottery" — a DESCRIPTION of what the system knows. Production
+    states facts and their authority: "Known about this user (use it,
+    don't re-ask)" and "The user's CURRENT location is X ... use it without
+    asking them where they are."
+
+    The agent responded to the weaker phrasing exactly as you would expect
+    — it asked for information it supposedly had, and said it could not use
+    the user's data. Two failures that looked like the product ignoring
+    memory, caused by the harness not matching production. Same mistake as
+    the memory thresholds, the CORS header and the missing get_weather.
+    """
     from vital.agents.activity_scout import SYSTEM_PROMPT as SCOUT
     from vital.agents.sleep_energy import SYSTEM_PROMPT as SLEEP
 
     prompt = SCOUT if case.get("agent") == "activity_scout" else SLEEP
-    context = case.get("context", "")
-    return prompt + (f"\n\nContext for this turn: {context}" if context else "")
+
+    blocks = []
+    if case.get("memory"):
+        blocks.append("Known about this user (use it, don't re-ask): "
+                      + "; ".join(case["memory"]))
+    if case.get("location"):
+        blocks.append(
+            f"The user's CURRENT location is {case['location']}. This is live "
+            "from their device and OVERRIDES any location in the stored facts "
+            "above. Use it for weather, venue and event searches without "
+            "asking them where they are.")
+    if case.get("context"):
+        blocks.append(case["context"])
+
+    return prompt + ("\n\n" + "\n\n".join(blocks) if blocks else "")
 
 
 @pytest.mark.skipif(not LIVE, reason="set ANSWER_QUALITY_EVAL=1")
