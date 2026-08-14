@@ -246,6 +246,18 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   border: 1px solid var(--glass-border); border-radius: 6px; padding: 3px 6px;
 }
 
+/* ---- Sync diagnosis ---- */
+.sync-trace { margin-top: 8px; font-size: 11.5px; }
+.sync-trace ul { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 5px; }
+.sync-trace li { display: flex; gap: 6px; align-items: flex-start; color: var(--muted); }
+.sync-trace li > span { flex: 0 0 auto; }
+.sync-trace li.ok > span { opacity: 0.5; }
+/* Failures are marked, not alarmed: "not enough nights yet" is the most
+   common answer and is not a fault. */
+.sync-trace li.bad { color: inherit; }
+.sync-trace em { font-style: normal; font-weight: 600; }
+.sync-fix { margin-top: 2px; opacity: 0.8; }
+
 .upload-fallback { padding: 0 4px 10px; }
 .upload-fallback > summary {
   color: var(--muted); font-size: 11.5px; cursor: pointer;

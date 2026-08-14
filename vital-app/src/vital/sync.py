@@ -156,6 +156,125 @@ def sync_if_stale(user_id: str, provider_name: str = "google-health") -> None:
     sync(user_id, provider_name)
 
 
+def diagnose(user_id: str, provider_name: str = "google-health") -> dict:
+    """Walk the whole path and report where it breaks.
+
+    "The forecast says 10% confidence" has at least seven possible causes,
+    and they are indistinguishable from the outside: no credentials, no
+    connection, an expired refresh token, an unreadable one, a provider
+    outage, an account with no data, or rows that arrived but never reached
+    the forecast.
+
+    Guessing between those is how an afternoon disappears. This does each
+    step in order and stops at the first failure with the actual fix.
+
+    Returns FACTS ABOUT THE CALLER'S OWN CONNECTION ONLY. No tokens, no
+    other users, nothing that is not already visible to them — a
+    diagnostic endpoint is a lovely place to accidentally build an
+    information leak.
+    """
+    from vital import forecast as engine
+    from vital import providers, secrets as token_secrets
+
+    steps: list[dict] = []
+
+    def record(name: str, ok: bool, detail: str, fix: str = "") -> bool:
+        steps.append({"step": name, "ok": ok, "detail": detail,
+                      **({"fix": fix} if fix and not ok else {})})
+        return ok
+
+    def done(summary: str) -> dict:
+        return {"provider": provider_name, "steps": steps, "summary": summary}
+
+    try:
+        provider = providers.get_provider(provider_name)
+    except KeyError:
+        record("provider exists", False, f"no provider named {provider_name!r}")
+        return done("Unknown provider.")
+
+    if not record("server credentials", provider.configured(),
+                  "client id, secret and redirect URI are set" if provider.configured()
+                  else "one of GOOGLE_HEALTH_CLIENT_ID/SECRET/REDIRECT_URI is missing",
+                  "check the Cloud Run env vars and secret mounts"):
+        return done("The server is not configured for this provider.")
+
+    if not record("token encryption", token_secrets.available(),
+                  "TOKEN_ENCRYPTION_KEY is present and valid"
+                  if token_secrets.available() else "key missing or not a Fernet key",
+                  "set TOKEN_ENCRYPTION_KEY from Secret Manager and redeploy"):
+        return done("Tokens cannot be stored or read.")
+
+    row = storage.get_connection(user_id, provider_name)
+    if not record("connection", bool(row),
+                  f"connected {row['connected_at'][:10]}" if row else "no connection row",
+                  "click Connect in the Devices panel"):
+        return done("Nothing is linked yet — that is why the forecast is generic.")
+
+    if row.get("last_error"):
+        record("last sync", False, row["last_error"][:160],
+               "reconnect if this says auth:")
+    else:
+        record("last sync", True,
+               f"succeeded {row['last_sync_at'][:16]}" if row.get("last_sync_at")
+               else "never run yet")
+
+    try:
+        refresh_token = storage.get_refresh_token(user_id, provider_name)
+        record("stored token readable", bool(refresh_token),
+               "decrypted" if refresh_token else "row present but token empty")
+    except Exception as exc:
+        record("stored token readable", False, type(exc).__name__,
+               "the encryption key has probably rotated — disconnect and reconnect")
+        return done("The saved token cannot be decrypted.")
+
+    try:
+        token, expires_in = provider.access_token(refresh_token)
+        record("access token", True, f"minted, valid ~{expires_in // 60} min")
+    except Exception as exc:
+        record("access token", False, f"{type(exc).__name__}: {exc}"[:200],
+               "in Testing publishing status refresh tokens expire after 7 "
+               "days — reconnect")
+        return done("The provider rejected the saved authorization.")
+
+    try:
+        since = date.today() - timedelta(days=INITIAL_DAYS)
+        nights = provider.fetch_nights(token, since)
+        record("provider data", bool(nights),
+               f"{len(nights)} night(s) since {since.isoformat()}"
+               if nights else f"API reachable but returned nothing since {since}",
+               "check the watch has synced to the phone app recently, and that "
+               "it actually recorded sleep")
+    except Exception as exc:
+        record("provider data", False, f"{type(exc).__name__}: {exc}"[:200])
+        return done("The provider call failed.")
+
+    stored = [r for r in storage.health_rows(user_id)
+              if r.get("source") == provider.source_tag]
+    record("stored locally", bool(stored),
+           f"{len(stored)} row(s) tagged {provider.source_tag}"
+           if stored else "provider returned data but nothing is saved",
+           "run Sync now — fetching and storing are separate steps")
+
+    # The end of the chain: what the forecast actually sees. Everything
+    # above can pass and this still be thin, which is the case worth
+    # naming explicitly.
+    merged = engine.nights_from_rows(
+        storage.sleep_history(engine.DEBT_WINDOW_NIGHTS * 2),
+        storage.health_rows(user_id))
+    phased = sum(1 for n in merged if n.wake_time)
+    confidence = engine.confidence(merged, storage.local_today())
+    record("forecast input", confidence > 0.4,
+           f"{len(merged)} night(s), {phased} with clock times, "
+           f"confidence {confidence}",
+           "the forecast needs ~14 nights WITH wake times; uploads carry "
+           "duration only, which is why confidence stays low on them")
+
+    failed = [s for s in steps if not s["ok"]]
+    if not failed:
+        return done(f"Healthy. Forecast confidence {confidence}.")
+    return done(f"First problem: {failed[0]['step']} — {failed[0]['detail']}")
+
+
 def disconnect(user_id: str, provider_name: str = "google-health") -> dict:
     """Revoke upstream, delete the token, erase what the provider wrote.
 

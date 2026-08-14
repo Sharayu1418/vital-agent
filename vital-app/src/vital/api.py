@@ -1059,6 +1059,26 @@ def connect_callback(provider_name: str,
     return back("ok")
 
 
+@app.get("/connect/{provider_name}/diagnose")
+def connect_diagnose(provider_name: str, response: Response,
+                     ident: Identity = Depends()) -> dict:
+    """Where the wearable data path breaks, for the CALLER's own connection.
+
+    "Confidence is 10%" has seven possible causes that look identical from
+    outside. This names which one.
+
+    Scoped to the caller and returns no tokens — a diagnostic endpoint is
+    an easy place to build an information leak by accident. Rate limited
+    with the connect bucket because it makes a live provider call.
+    """
+    from vital import sync as sync_mod
+
+    user_id, new_session = ident.limit("connect")
+    current_user_id.set(user_id)
+    _set_session(response, new_session)
+    return sync_mod.diagnose(user_id, provider_name)
+
+
 @app.post("/connect/{provider_name}/sync")
 def connect_sync(provider_name: str, response: Response,
                  ident: Identity = Depends()) -> dict:

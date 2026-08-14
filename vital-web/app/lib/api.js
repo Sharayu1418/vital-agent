@@ -169,6 +169,7 @@ export const api = {
   connections: () => request("/connections"),
   connectStart: (provider) => request(`/connect/${provider}`),
   connectSync: (provider) => request(`/connect/${provider}/sync`, { method: "POST" }),
+  connectDiagnose: (provider) => request(`/connect/${provider}/diagnose`),
   connectDisconnect: (provider) =>
     request(`/connect/${provider}`, { method: "DELETE" }),
   calendar: () => request("/calendar"),

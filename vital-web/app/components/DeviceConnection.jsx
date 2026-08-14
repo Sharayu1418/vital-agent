@@ -29,6 +29,7 @@ function ago(iso) {
 export default function DeviceConnection({ connection, onChanged }) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState(null);
+  const [trace, setTrace] = useState(null);
 
   if (!connection?.available) return null;
 
@@ -66,6 +67,25 @@ export default function DeviceConnection({ connection, onChanged }) {
       onChanged?.();
     } catch {
       setNote("Sync failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /* "Why is my forecast still generic?" has several possible answers that
+   * look identical from here — nothing connected, an expired token, a
+   * watch that has not synced, or simply not enough nights yet. Rather
+   * than guess, ask the server which link is broken. */
+  async function diagnose() {
+    setBusy(true);
+    setNote(null);
+    try {
+      const res = await api.connectDiagnose(connection.provider);
+      const body = await res.json();
+      setTrace(res.ok ? body : null);
+      if (!res.ok) setNote(body.detail || "Couldn't run the check.");
+    } catch {
+      setNote("Couldn't reach the server.");
     } finally {
       setBusy(false);
     }
@@ -139,6 +159,29 @@ export default function DeviceConnection({ connection, onChanged }) {
             Disconnect
           </button>
         </>
+      )}
+
+      {connected && (
+        <button className="device-link" onClick={diagnose} disabled={busy}>
+          Why is my forecast still generic?
+        </button>
+      )}
+
+      {trace && (
+        <div className="sync-trace">
+          <p className="side-hint"><strong>{trace.summary}</strong></p>
+          <ul>
+            {trace.steps.map((s) => (
+              <li key={s.step} className={s.ok ? "ok" : "bad"}>
+                <span>{s.ok ? "✓" : "✕"}</span>
+                <div>
+                  <em>{s.step}</em> — {s.detail}
+                  {s.fix && <div className="sync-fix">{s.fix}</div>}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {note && <p className="side-hint" role="status">{note}</p>}
