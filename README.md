@@ -2,7 +2,29 @@
 
 **An agentic life copilot that turns sleep, energy, interests, and intent into grounded actions and plans.**
 
-[Open the web app](https://vital-agent.vercel.app)
+[![CI](https://github.com/Sharayu1418/vital-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/Sharayu1418/vital-agent/actions/workflows/ci.yml)
+
+[Open the web app](https://vital-agent.vercel.app) · [Architecture walkthrough](VITAL-EXPLAINED.md) · [Threat model](SECURITY.md)
+
+### Three things that make this more than a chat wrapper
+
+**Plans cannot be committed without you.** The node that writes to your
+calendar has no inbound edge except a human approval resume. It is not a
+rule the model follows — it is a path that does not exist, so no prompt
+injection can reach it. [`planner.py`](vital-app/src/vital/planner.py)
+
+**The energy forecast is a model, not a prompt.** Borbély's two-process
+model — sleep inertia, homeostatic pressure, circadian rhythm, the
+afternoon dip — keyed to your own wake time, with constants solved
+numerically and pinned by tests. It reports a confidence that degrades
+honestly: with no data it says 10% and tells you the curve is not yours.
+[`forecast.py`](vital-app/src/vital/forecast.py)
+
+**Quality is measured, not asserted.** Routing, crisis detection, memory
+retrieval, grounding and answer quality all have evals with gates. The
+answer eval grades the real agent against a rubric and catches the things
+unit tests cannot — an answer that is subtly less honest than it claims to
+be. [`tests/`](vital-app/tests/)
 
 VITAL is a full-stack, AI-native application built around a supervised team of specialized agents. Instead of sending every request through one oversized prompt, VITAL uses LangGraph to route work to the right specialist, preserve conversational state, pause for human approval, and safely commit approved plans.
 
@@ -31,8 +53,11 @@ VITAL separates those responsibilities into focused agents:
 | Sleep and Energy | Records sleep, reads recent patterns, and analyzes uploaded Apple Health or CSV data |
 | Idea Generator | Turns interests and constraints into concrete, personalized ideas |
 | People Connector | Finds opt-in activity buddies, the places an activity actually happens, and public events |
-| Planner | Produces structured plans with timing, rationale, and tradeoffs |
-| Memory Writer | Extracts durable, user-specific facts after useful agent turns |
+| Planner | Produces structured plans with timing, rationale, and tradeoffs, justified against the energy forecast |
+
+Memory extraction is not an agent. It runs after the answer has already been
+streamed, so remembering something never makes anyone wait — it was a graph
+node until that cost showed up in the latency numbers.
 
 This architecture keeps each prompt and toolset narrow, makes routing observable, and lets important actions use explicit workflow rules instead of model discretion alone.
 
@@ -48,11 +73,10 @@ flowchart TD
     S --> P["People Connector"]
     S --> PL["Planner"]
 
-    A --> M["Memory Writer"]
-    E --> M
-    I --> M
-    P --> M
-    M --> S
+    A --> END["End of turn"]
+    E --> END
+    I --> END
+    P --> END
 
     PL --> H["Human approval interrupt"]
     H -->|Approve| C["Commit plan"]
@@ -60,8 +84,25 @@ flowchart TD
     H -->|Reject| X["End without commit"]
 
     C --> DB["Calendar and plan storage"]
-    S --> R["Stream response over SSE"]
+    END --> R["Stream response over SSE"]
+
+    style H fill:#4a3,color:#fff
+    style C fill:#a33,color:#fff
 ```
+
+Two details in that shape are deliberate.
+
+**Specialists go straight to the end of the turn.** They used to return to
+the supervisor via a memory-writing node, on the theory that a second
+specialist might be chained. In production that theory cost 5× — the
+supervisor could not tell an agent had already answered, so it re-routed
+the same message until the hop guard fired. Turns took 37–57 seconds and
+12–16k tokens; now 9.6s and 3.3k. Memory extraction moved after the
+response, where it costs the user nothing.
+
+**`Commit plan` has exactly one inbound edge**, and it comes from the
+human approval resume. That is the security boundary: not a rule in a
+prompt, but the absence of any other path.
 
 The graph is stateful and bounded:
 
@@ -108,15 +149,18 @@ LangChain helps each agent reason and use tools. LangGraph defines what agents a
 The Next.js frontend provides:
 
 - Google sign-in through Firebase Authentication
-- Streaming chat with live tool-status feedback
+- Streaming chat, with status lines that say what is happening rather than which function is running
 - A thread sidebar with persistent conversation history
 - Structured plan cards with approve, edit, and reject controls
-- Apple Health XML and CSV upload
+- A predicted energy curve for the next 24 hours, shown with its confidence
+- Fitbit and Pixel Watch connection, with a visible "Reconnect" state when authorisation expires
+- An opt-in morning brief by web push — one notification, or none
 - Recent sleep summaries and trend analysis
+- Apple Health XML and CSV upload, kept as the fallback it is
 - A visible and deletable "What VITAL knows" memory view
-- Opt-in activity buddy posts and requests
+- Opt-in activity buddy posts and requests, with a shared meeting-point PDF once a match is accepted
 - Voice input and optional read-aloud responses
-- Device or manual-location daylight theming based on sunrise and sunset
+- Daylight theming computed from the real sunrise and sunset at the user's location
 - Responsive layouts for desktop and mobile
 
 The first-use experience is intentionally lightweight: users can begin with a chat instead of completing a long onboarding form.
@@ -207,24 +251,40 @@ VITAL/
 |-- vital-app/                  # Python API and agent system
 |   |-- src/vital/
 |   |   |-- agents/             # Specialist agent implementations
+|   |   |-- tools/              # Weather, Places, events adapters
+|   |   |-- providers/          # Wearable sync seam + Google Health adapter
 |   |   |-- api.py              # FastAPI routes and SSE transport
 |   |   |-- graph.py            # LangGraph workflow
 |   |   |-- supervisor.py       # Structured routing logic
-|   |   |-- memory.py           # Long-term memory extraction
-|   |   |-- planner.py          # Structured plans and approval flow
-|   |   |-- persistence.py      # SQLite and Postgres product storage
-|   |   |-- ingestion.py        # Apple Health and CSV normalization
+|   |   |-- planner.py          # Structured plans and the approval gate
+|   |   |-- forecast.py         # Two-process energy model (pure, no I/O)
+|   |   |-- brief.py            # Morning brief composer
+|   |   |-- meetup.py           # Fair meeting points for buddy matches
+|   |   |-- memory.py           # Semantic memory: store, dedupe, recall
+|   |   |-- guardrails.py       # Crisis detection and token budgets
+|   |   |-- ratelimit.py        # Per-identity request ceilings
+|   |   |-- sandbox.py          # Static gate + microVM for model-written code
+|   |   |-- buddies.py          # Activity Buddy Board and moderation
+|   |   |-- storage.py          # SQLite and Postgres product storage
+|   |   |-- ingest.py           # Apple Health and CSV normalization
+|   |   |-- secrets.py          # Encryption for stored OAuth tokens
+|   |   |-- oauth_state.py      # CSRF protection for provider linking
 |   |   `-- security.py         # Firebase verification and identity
-|   |-- tests/
+|   |-- tests/                  # 35 files; unit tests, contracts, and evals
+|   |-- scripts/                # Threshold tuning, backfill, moderation queue,
+|   |                           # feedback digest, post-deploy smoke test
 |   `-- pyproject.toml
 |-- vital-web/                  # Next.js web application
 |   |-- app/
 |   |   |-- components/         # Chat, sidebars, plans, buddies, auth
-|   |   |-- lib/                # API, auth, location, and theme helpers
+|   |   |-- lib/                # API, auth, location, push, theme helpers
 |   |   `-- page.jsx            # Main authenticated application
+|   |-- public/sw.js            # Service worker (morning brief only)
 |   |-- tests/
 |   `-- package.json
-`-- docs/                       # Setup and project documentation
+|-- docs/                       # Architecture, limitations, observability
+|   `-- planning/               # Original design docs and phase plans
+`-- .github/workflows/          # CI: backend tests + frontend build
 ```
 
 ## Run Locally
@@ -315,7 +375,38 @@ pnpm test
 pnpm build
 ```
 
-The test suites cover agent routing, approval topology, Firebase verification, persistence, tool behavior, health-data ingestion, authentication state, location handling, daylight themes, and frontend integration contracts.
+Around 480 tests. They cover approval topology, identity and session
+handling, tool behaviour and failure contracts, health-data ingestion,
+the energy model, moderation, rate limiting, and the CORS contract between
+frontend and backend.
+
+CI runs the backend suite and the frontend build on every push. Both of
+those existed before CI did, and both would have caught a production
+outage that reached users instead — which is why the workflow exists.
+
+### Evals
+
+Four things are measured rather than assumed. They call real models, so
+they are opt-in rather than part of CI: a job that goes red for reasons
+nobody controls gets ignored, and then it protects nothing.
+
+```bash
+VITAL_LIVE_EVALS=1      uv run pytest tests/test_routing.py    # routing, >=90%
+CRISIS_LIVE_EVAL=1      uv run pytest tests/test_crisis_live.py # recall/precision
+MEMORY_LIVE_EVAL=1      uv run pytest tests/test_memory_live.py # dedupe + recall
+ANSWER_QUALITY_EVAL=1   uv run pytest tests/test_answer_quality.py -s
+```
+
+The answer eval builds the **real** agent with stubbed tools and grades it
+against a rubric. It is the only thing here that can catch an answer being
+subtly less useful or less honest than it claims — no unit test sees that.
+Its first useful run scored 86%, and four of the seven failures across
+three runs turned out to be bugs in the eval rather than the product,
+which is worth knowing about model-graded evaluation generally.
+
+A note on reading it: a tool-calling agent is not deterministic even at
+temperature 0, so the noise floor is two or three items out of twenty-six.
+A sustained drop is a regression; a single case flipping is weather.
 
 ## Deployment
 
@@ -338,7 +429,11 @@ VITAL is an actively developed product. Current technical boundaries include:
 - Memory retrieval and dedup are semantic (pgvector via LangGraph's store index); the similarity threshold is validated against real cases in `tests/test_memory_live.py`.
 - Approved plans commit to VITAL's relational calendar, not Google Calendar.
 - Community discovery has no third-party provider by design — Reddit, Meetup, Facebook Groups, Eventbrite search and Strava clubs have all closed or gone paid since 2019. It runs on Google Places and the Activity Buddy Board instead; see [docs/LIMITATIONS.md](docs/LIMITATIONS.md).
-- Conversation history is not trimmed, so long threads grow in cost and latency.
+- Conversation history is trimmed to the most recent turns (`HISTORY_LIMIT`) but not *summarised*, so a very long thread loses early context rather than compressing it. Durable facts survive in long-term memory.
+- **Apple Watch cannot be synced from a server.** HealthKit data lives on the device and Apple runs no aggregation service, so it needs a native iOS app; aggregators do not avoid this, they hand you an iOS SDK. Fitbit and Pixel Watch sync through the Google Health API. Oura, Whoop and Garmin would each be one adapter file behind `providers/base.py` — deliberately not written, because an integration for a device nobody here owns cannot be verified end to end.
+- Wearable OAuth runs in Google's "Testing" publishing status, where refresh tokens expire after 7 days; the panel surfaces this as "Reconnect" rather than failing quietly. Publishing needs OAuth verification plus an annual CASA security assessment.
+- Rate limiting is in-process, so across several Cloud Run instances the effective limit is roughly the configured one times the instance count. It stops a single client in a loop; a distributed flood needs Cloud Armor.
+- Moderation reports auto-hide a post after three distinct reporters and land in a queue reviewed by script (`scripts/review_reports.py`), not a web console.
 - Health uploads stream and are memory-safe, but Cloud Run caps HTTP/1.1 bodies at 32MB; larger Apple Health exports need a signed-URL upload to GCS.
 - Without `DATABASE_URL`, graph checkpoints are process-local and do not survive restarts.
 - Production is currently designed around a single deployment region.
