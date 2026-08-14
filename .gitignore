@@ -1,3 +1,11 @@
 # monorepo root: vital-app (backend) + vital-web (frontend) + planning docs
 # per-folder ignores live in vital-app/.gitignore and vital-web/.gitignore
 .DS_Store
+
+# macOS
+.DS_Store
+
+# Scratch: agent working directory and one-off run logs. Useful while
+# working, noise in a repository someone else has to read.
+outputs/
+*-eval.txt

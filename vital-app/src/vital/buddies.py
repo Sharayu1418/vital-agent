@@ -230,7 +230,12 @@ def search_posts(user_id: str, activity: str | None = None, city: str | None = N
     my_key = public_user_key(user_id)
     with _conn() as c:
         rows = [dict(r) for r in c.execute(
+            # COALESCE, not `hidden = 0`: rows that existed before the
+            # column was added have NULL there, and `NULL = 0` is NULL in
+            # SQL — which is not true, so every pre-existing post would
+            # silently vanish from the board.
             "SELECT * FROM activity_posts WHERE active = 1 "
+            "AND COALESCE(hidden, 0) = 0 "
             "ORDER BY created_at DESC LIMIT 500").fetchall()]
         i_blocked = {r["blocked_key"] for r in c.execute(
             "SELECT blocked_key FROM user_blocks WHERE user_id = ?", (user_id,)).fetchall()}
@@ -311,7 +316,10 @@ def create_request(user_id: str, post_id: int, message: str = "",
     now = _now()
     with _conn() as c:
         post = _post_row(c, post_id)
-        if post is None or not post["active"]:
+        # A hidden post reads as absent. Saying "this post is under review"
+        # would tell a reported user exactly what happened and to whom,
+        # which is the last thing to hand someone being reported.
+        if post is None or not post["active"] or post.get("hidden"):
             raise LookupError("post not found")
         if post["user_id"] == user_id:
             raise ValueError("you can't request to join your own post")
@@ -382,14 +390,58 @@ def decide_request(user_id: str, request_id: int, status: str) -> dict:
 
 # ---------- moderation placeholders ----------
 
+# Distinct people who must independently report a post before it is taken
+# out of circulation automatically. Three, not one: a single report should
+# never let somebody remove a rival, and a genuine problem attracts more
+# than one complaint quickly. Reports still reach a human below this — the
+# threshold only decides whether the post stays visible while they wait.
+AUTO_HIDE_REPORTS = 3
+
+
 def report_post(user_id: str, post_id: int, reason: str = "") -> dict:
+    """File a report, and act on it.
+
+    This used to insert a row and return. Nothing read the table, so a
+    report had no effect whatsoever — the user was thanked and nothing
+    happened, ever. For a product that introduces strangers to each other
+    that was the most serious gap in the codebase.
+
+    Now a report does three things: it is deduplicated per reporter, it
+    counts toward automatic hiding, and it raises an alert through the same
+    tool-health metric that watches everything else. The last one matters
+    most: it means a report reaches a person without anybody remembering to
+    check a table.
+    """
+    from vital import metrics, storage
+
     with _conn() as c:
         if _post_row(c, post_id) is None:
             raise LookupError("post not found")
+
+    if storage.already_reported(post_id, user_id):
+        # Idempotent, and says nothing about whether others have reported.
+        # Disclosing the count would let someone probe how close a rival is
+        # to being hidden.
+        return {"reported": post_id, "already": True}
+
+    with _conn() as c:
         c.execute("INSERT INTO activity_reports (post_id, reporter_user_id, reason, "
                   "created_at) VALUES (?, ?, ?, ?)",
-                  (post_id, user_id, reason[:500], _now()))
-    return {"reported": post_id}
+                  (post_id, user_id, scrub_contact_info(reason)[:500], _now()))
+
+    reporters = storage.distinct_reporters(post_id)
+    hidden = reporters >= AUTO_HIDE_REPORTS
+    if hidden:
+        storage.hide_post(post_id)
+
+    # Routed through log_tool so the existing alert policy sees it. A second
+    # observability path for moderation would be one more thing to remember
+    # to build, and this one is already wired to an alert.
+    metrics.log_tool(user_id, "moderation:report",
+                     "error" if hidden else "ok",
+                     error=(f"post {post_id} auto-hidden after {reporters} "
+                            "reports" if hidden else None))
+    return {"reported": post_id, "hidden": hidden}
 
 
 def block_user(user_id: str, blocked_key: str) -> dict:

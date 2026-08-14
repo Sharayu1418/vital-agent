@@ -236,6 +236,11 @@ _MIGRATIONS = [
     "ALTER TABLE activity_posts ADD COLUMN lng REAL",
     "ALTER TABLE activity_requests ADD COLUMN requester_lat REAL",
     "ALTER TABLE activity_requests ADD COLUMN requester_lng REAL",
+    # Moderation. `hidden` is separate from `active` on purpose: active is
+    # the owner's own switch, hidden is ours. Conflating them would let a
+    # reported user un-hide themselves by toggling their post.
+    "ALTER TABLE activity_posts ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE activity_reports ADD COLUMN reviewed_at TEXT",
 ]
 
 
@@ -529,6 +534,85 @@ def save_health_rows(user_id: str, rows: list[dict]) -> int:
               str(r.get("quality") or ""), str(r.get("source") or "upload"))
              for r in rows])
     return len(rows)
+
+
+# ---------- moderation ----------
+#
+# Reports used to be written to a table nothing ever read. For a product
+# that introduces strangers to each other that is the most serious gap in
+# the codebase: somebody reports harassment, the app thanks them, and no
+# human is ever told. Same shape as the dead Reddit tool and the unread
+# feedback — data collected, nobody looking.
+
+def already_reported(post_id: int, reporter_user_id: str) -> bool:
+    """One report per person per post.
+
+    Without this, a single user could hide anybody by reporting them
+    repeatedly — turning a safety feature into a weapon.
+    """
+    with _conn() as c:
+        row = c.execute(
+            "SELECT 1 FROM activity_reports WHERE post_id = ? AND "
+            "reporter_user_id = ?", (post_id, reporter_user_id)).fetchone()
+    return row is not None
+
+
+def distinct_reporters(post_id: int) -> int:
+    with _conn() as c:
+        row = c.execute(
+            "SELECT COUNT(DISTINCT reporter_user_id) AS n FROM activity_reports "
+            "WHERE post_id = ?", (post_id,)).fetchone()
+    return int(dict(row)["n"]) if row else 0
+
+
+def hide_post(post_id: int) -> None:
+    """Take a post out of circulation pending review.
+
+    Hiding rather than deleting: a false report should be reversible, and
+    the post is evidence if the report was genuine.
+    """
+    with _conn() as c:
+        c.execute("UPDATE activity_posts SET hidden = 1 WHERE id = ?", (post_id,))
+
+
+def unhide_post(post_id: int) -> None:
+    with _conn() as c:
+        c.execute("UPDATE activity_posts SET hidden = 0 WHERE id = ?", (post_id,))
+
+
+def open_reports() -> list[dict]:
+    """Everything awaiting a human decision, worst first."""
+    with _conn() as c:
+        rows = c.execute(
+            """SELECT r.post_id, COUNT(DISTINCT r.reporter_user_id) AS reporters,
+                      MAX(r.created_at) AS latest,
+                      p.activity, p.city, p.notes, p.display_name, p.hidden
+               FROM activity_reports r
+               JOIN activity_posts p ON p.id = r.post_id
+               WHERE r.reviewed_at IS NULL
+               GROUP BY r.post_id, p.activity, p.city, p.notes,
+                        p.display_name, p.hidden
+               ORDER BY reporters DESC, latest DESC""").fetchall()
+    return [dict(r) for r in rows]
+
+
+def report_reasons(post_id: int) -> list[str]:
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT reason FROM activity_reports WHERE post_id = ? AND "
+            "reason <> ''", (post_id,)).fetchall()
+    return [dict(r)["reason"] for r in rows]
+
+
+def resolve_reports(post_id: int) -> int:
+    """Mark every report on a post as reviewed. Returns how many."""
+    from datetime import datetime, timezone
+    with _conn() as c:
+        cur = c.execute(
+            "UPDATE activity_reports SET reviewed_at = ? WHERE post_id = ? "
+            "AND reviewed_at IS NULL",
+            (datetime.now(timezone.utc).isoformat(), post_id))
+        return cur.rowcount or 0
 
 
 # ---------- morning brief preferences + push subscriptions ----------

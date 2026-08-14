@@ -21,8 +21,8 @@ from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 from starlette.concurrency import run_in_threadpool
 
-from vital import (buddies, guardrails, ingest, memory, metrics, storage,
-                   vocabulary)
+from vital import (buddies, guardrails, ingest, memory, metrics, ratelimit,
+                   storage, vocabulary)
 from vital.config import settings
 from vital.graph import (build_graph_async, close_graph_resources,
                          write_memories)
@@ -153,6 +153,26 @@ class Identity:
 
     def resolve(self, req_user_id: str = "local-user") -> tuple[str, str | None]:
         return resolve_identity(req_user_id, self.auth, self.session)
+
+    def limit(self, bucket: str, req_user_id: str = "local-user") -> tuple[str, str | None]:
+        """resolve(), with a request-rate ceiling.
+
+        Keyed on the RESOLVED identity, after auth — never on anything the
+        client sends, which could otherwise be changed to reset the
+        counter. Rate limiting before identity would also mean one shared
+        bucket for every anonymous caller, so a single loop would lock out
+        everybody.
+        """
+        user_id, new_session = self.resolve(req_user_id)
+        allowed, retry_after = ratelimit.check(bucket, user_id)
+        if not allowed:
+            metrics.log_tool(user_id, f"ratelimit:{bucket}", "error",
+                             error="rate limited")
+            raise HTTPException(
+                status_code=429,
+                detail="That's a lot of requests very quickly — give it a moment.",
+                headers={"Retry-After": str(retry_after)})
+        return user_id, new_session
 
 
 class ChatRequest(BaseModel):
@@ -501,7 +521,7 @@ def _graph_stream(graph_input, config, user_id: str, screen=None):
 
 @app.post("/chat")
 async def chat(req: ChatRequest, ident: Identity = Depends()) -> EventSourceResponse:
-    user_id, new_session = ident.resolve(req.user_id)
+    user_id, new_session = ident.limit("chat", req.user_id)
     current_user_id.set(user_id)  # tools read identity from here, never from the LLM
     if ident.auth.kind == "firebase":
         # signed-in users get a cross-device thread index (title = first
@@ -652,7 +672,7 @@ async def upload_health(file: UploadFile, response: Response,
     handler streams correctly, but the service also needs HTTP/2 enabled
     before uploads above that size can reach it at all.
     """
-    user_id, new_session = ident.resolve()
+    user_id, new_session = ident.limit("write")
     _set_session(response, new_session)
     name = (file.filename or "").lower()
     spool = await _spool_upload(file)
@@ -851,7 +871,7 @@ def brief_preview(response: Response, ident: Identity = Depends()) -> dict:
     """
     from vital import brief_job
 
-    user_id, new_session = ident.resolve()
+    user_id, new_session = ident.limit("write")
     current_user_id.set(user_id)
     _set_session(response, new_session)
     prefs = storage.get_prefs(user_id)
@@ -880,7 +900,7 @@ def brief_test(response: Response, ident: Identity = Depends()) -> dict:
     """
     from vital import brief_job, push as push_mod
 
-    user_id, new_session = ident.resolve()
+    user_id, new_session = ident.limit("connect")
     current_user_id.set(user_id)
     _set_session(response, new_session)
 
@@ -961,7 +981,7 @@ def connect_start(provider_name: str, response: Response,
     """
     from vital import oauth_state, providers, secrets as token_secrets
 
-    user_id, new_session = ident.resolve()
+    user_id, new_session = ident.limit("connect")
     _set_session(response, new_session)
 
     try:
@@ -1045,7 +1065,7 @@ def connect_sync(provider_name: str, response: Response,
     """Manual 'Sync now'. Never raises — the result is the report."""
     from vital import sync as sync_mod
 
-    user_id, new_session = ident.resolve()
+    user_id, new_session = ident.limit("connect")
     _set_session(response, new_session)
     result = sync_mod.sync(user_id, provider_name)
     result["status"] = sync_mod.status(user_id, provider_name)
@@ -1225,7 +1245,7 @@ class BuddyReport(BaseModel):
 @app.post("/activity-posts")
 def create_activity_post(req: ActivityPostCreate, response: Response,
                          ident: Identity = Depends()) -> dict:
-    user_id, new_session = ident.resolve()
+    user_id, new_session = ident.limit("write")
     _set_session(response, new_session)
     return {"post": _buddy_call(buddies.create_post, user_id, req.model_dump()),
             "safety_note": buddies.SAFETY_NOTE}
@@ -1265,7 +1285,7 @@ def update_activity_post(post_id: int, req: ActivityPostUpdate,
 @app.post("/activity-posts/{post_id}/request")
 def request_to_join(post_id: int, req: BuddyRequestCreate,
                     response: Response, ident: Identity = Depends()) -> dict:
-    user_id, new_session = ident.resolve()
+    user_id, new_session = ident.limit("write")
     _set_session(response, new_session)
     result = _buddy_call(buddies.create_request, user_id, post_id,
                          req.message, req.requester_name)
@@ -1303,7 +1323,7 @@ def meeting_plan(request_id: int, ident: Identity = Depends()):
     from vital import meetup, meetup_pdf
     from vital.tools.places import search_near
 
-    user_id, _ = ident.resolve()
+    user_id, _ = ident.limit("write")
     row = _buddy_call(buddies.meeting_context, user_id, request_id)
 
     if not all(row.get(k) is not None
@@ -1353,7 +1373,7 @@ def meeting_plan(request_id: int, ident: Identity = Depends()):
 @app.post("/activity-posts/{post_id}/report")
 def report_activity_post(post_id: int, req: BuddyReport, response: Response,
                          ident: Identity = Depends()) -> dict:
-    user_id, new_session = ident.resolve()
+    user_id, new_session = ident.limit("write")
     _set_session(response, new_session)
     return _buddy_call(buddies.report_post, user_id, post_id, req.reason)
 
