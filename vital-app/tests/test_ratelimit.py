@@ -85,12 +85,20 @@ def test_an_unknown_bucket_is_still_limited():
 
 def test_it_does_not_grow_without_bound():
     """A limiter that leaks memory is a slower version of the problem it
-    was added to fix."""
-    _, window = ratelimit.LIMITS["read"]
+    was added to fix.
+
+    The clock advances past the LONGEST configured window, not the one for
+    this bucket. Eviction cannot use a per-bucket window — it walks every
+    key, and a "read" entry is only dead once nothing could still reference
+    it. Advancing by the read window left everything live and the dict full,
+    which is what the first version of this test asserted against.
+    """
+    longest = max(window for _, window in ratelimit.LIMITS.values())
     for i in range(ratelimit._MAX_KEYS + 200):
         ratelimit.check("read", f"user-{i}", now=1000.0)
-    # Everything above is stale by now, so the next call should evict.
-    ratelimit.check("read", "fresh", now=1000.0 + window * 3)
+    assert len(ratelimit._hits) > ratelimit._MAX_KEYS, "setup did not fill it"
+
+    ratelimit.check("read", "fresh", now=1000.0 + longest + 1)
     assert len(ratelimit._hits) < ratelimit._MAX_KEYS
 
 

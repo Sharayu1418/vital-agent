@@ -230,10 +230,11 @@ def search_posts(user_id: str, activity: str | None = None, city: str | None = N
     my_key = public_user_key(user_id)
     with _conn() as c:
         rows = [dict(r) for r in c.execute(
-            # COALESCE, not `hidden = 0`: rows that existed before the
-            # column was added have NULL there, and `NULL = 0` is NULL in
-            # SQL — which is not true, so every pre-existing post would
-            # silently vanish from the board.
+            # COALESCE is belt-and-braces. The migration adds `hidden` as
+            # NOT NULL DEFAULT 0, so both SQLite and Postgres backfill 0
+            # and no NULL should exist — but `NULL = 0` evaluates to NULL
+            # in SQL, not false, so if one ever did appear the post would
+            # vanish from the board silently rather than loudly.
             "SELECT * FROM activity_posts WHERE active = 1 "
             "AND COALESCE(hidden, 0) = 0 "
             "ORDER BY created_at DESC LIMIT 500").fetchall()]

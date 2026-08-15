@@ -38,9 +38,10 @@ def test_one_report_does_not_hide_a_post():
         "display_name": "Sam", "activity": "bouldering", "city": "Albany"})["id"]
     result = buddies.report_post("reporter-1", post_id, "rude")
     assert result["hidden"] is False
-    assert any(p["id"] == post_id
-               for p in buddies.find_buddies("someone-else", activity="bouldering",
-                                             city="Albany")["matches"]) or True
+    still_listed = buddies.search_posts("someone-else", activity="bouldering",
+                                        city="Albany")
+    assert any(p["id"] == post_id for p in still_listed), (
+        "one report removed a post from the board")
 
 
 def test_three_distinct_reporters_hide_it(post):
@@ -72,8 +73,7 @@ def test_a_repeat_report_reveals_nothing_about_the_count(post):
 def test_a_hidden_post_disappears_from_the_board(post):
     for i in range(3):
         buddies.report_post(f"reporter-{i}", post, "spam")
-    matches = buddies.find_buddies("browser", activity="bouldering",
-                                   city="Albany")["matches"]
+    matches = buddies.search_posts("browser", activity="bouldering", city="Albany")
     assert not any(m.get("id") == post for m in matches)
 
 
@@ -100,16 +100,22 @@ def test_a_hidden_post_reads_as_missing_not_as_moderated(post):
 
 
 def test_posts_predating_the_hidden_column_still_appear():
-    """`hidden` was added by migration, so old rows have NULL. In SQL
-    `NULL = 0` is NULL, not true — a plain `hidden = 0` filter would make
-    every pre-existing post silently vanish from the board."""
+    """Adding a moderation column must not retroactively hide the board.
+
+    The first version of this test tried to write NULL into `hidden` to
+    simulate a pre-migration row, and could not: the column is
+    `NOT NULL DEFAULT 0`, so both SQLite and Postgres backfill 0 on ALTER.
+    That is the actual guarantee, and it is a better one than the COALESCE
+    the query also carries — so this asserts the guarantee instead of
+    faking a state the schema forbids.
+    """
     post_id = buddies.create_post("owner", {
         "display_name": "Sam", "activity": "running", "city": "Albany"})["id"]
     with storage._conn() as c:
-        c.execute("UPDATE activity_posts SET hidden = NULL WHERE id = ?", (post_id,))
-    matches = buddies.find_buddies("browser", activity="running",
-                                   city="Albany")["matches"]
-    assert matches, "a NULL hidden column removed the post from the board"
+        row = dict(c.execute("SELECT hidden FROM activity_posts WHERE id = ?",
+                             (post_id,)).fetchone())
+    assert row["hidden"] == 0, "new posts must default to visible"
+    assert buddies.search_posts("browser", activity="running", city="Albany")
 
 
 # ---------- the queue a human actually reads ----------
@@ -136,8 +142,7 @@ def test_an_auto_hide_can_be_undone(post):
         buddies.report_post(f"reporter-{i}", post, "spam")
     storage.unhide_post(post)
     storage.resolve_reports(post)
-    matches = buddies.find_buddies("browser", activity="bouldering",
-                                   city="Albany")["matches"]
+    matches = buddies.search_posts("browser", activity="bouldering", city="Albany")
     assert any(m.get("id") == post for m in matches)
 
 
