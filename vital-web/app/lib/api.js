@@ -7,7 +7,12 @@
  * expired token racing its refresh), force-refresh once and retry once.
  * The `retried` flag makes an infinite loop impossible. */
 
-import { readGeo } from "./theme";
+// The extension is required. Next's bundler resolves "./theme" happily, so
+// `next build` passes either way — but the unit tests run under plain node
+// --test, where ESM does no extension guessing and the import throws
+// ERR_MODULE_NOT_FOUND. Three test files that merely import api.js failed
+// while the build stayed green.
+import { readGeo } from "./theme.js";
 
 const API = process.env.NEXT_PUBLIC_API_BASE;
 
