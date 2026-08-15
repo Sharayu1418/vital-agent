@@ -192,6 +192,11 @@ def test_the_agent_prompt_forbids_reordering():
     picking on vibes with extra steps."""
     from vital.agents.activity_scout import SYSTEM_PROMPT
 
-    lowered = SYSTEM_PROMPT.lower()
+    # Collapse whitespace before matching. The first version of this asserted
+    # `"do not" in SYSTEM_PROMPT.lower()` and failed the moment the prompt was
+    # rewrapped — the text reads "Do\n   NOT reorder", so the substring was
+    # split across a line break. A test that breaks on reflowing a paragraph
+    # is testing the formatting, not the instruction.
+    lowered = " ".join(SYSTEM_PROMPT.lower().split())
     assert "order given" in lowered or "already ranked" in lowered
     assert "do not" in lowered and "reorder" in lowered
