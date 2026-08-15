@@ -134,6 +134,9 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
     last_sync_at TEXT, last_error TEXT,
     PRIMARY KEY (user_id, provider)
 );
+CREATE TABLE IF NOT EXISTS suggestion_log (
+    user_id TEXT NOT NULL, venue_name TEXT NOT NULL, suggested_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS user_prefs (
     user_id TEXT NOT NULL PRIMARY KEY,
     brief_enabled INTEGER NOT NULL DEFAULT 0,   -- OFF until asked for
@@ -534,6 +537,29 @@ def save_health_rows(user_id: str, rows: list[dict]) -> int:
               str(r.get("quality") or ""), str(r.get("source") or "upload"))
              for r in rows])
     return len(rows)
+
+
+# ---------- what we have already suggested ----------
+#
+# A recommender that shows the same three places forever is a bookmark
+# list. This is the memory that makes the novelty signal mean anything.
+
+def record_suggestions(user_id: str, names: list[str]) -> None:
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as c:
+        c.executemany(
+            "INSERT INTO suggestion_log (user_id, venue_name, suggested_at) "
+            "VALUES (?, ?, ?)",
+            [(user_id, name[:120], now) for name in names])
+
+
+def recent_suggestions(user_id: str, limit: int = 12) -> list[str]:
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT venue_name FROM suggestion_log WHERE user_id = ? "
+            "ORDER BY suggested_at DESC LIMIT ?", (user_id, limit)).fetchall()
+    return [dict(r)["venue_name"] for r in rows]
 
 
 # ---------- moderation ----------

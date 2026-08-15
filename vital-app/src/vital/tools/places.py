@@ -43,6 +43,12 @@ def search_near(query: str, lat: float, lng: float, radius_km: float = 10.0,
                     "places.displayName", "places.rating",
                     "places.formattedAddress", "places.googleMapsUri",
                     "places.priceLevel", "places.location",
+                    # ranking.py needs both: types drive the effort estimate
+                    # that energy-fit is computed from, and the review COUNT
+                    # is what stops a 5.0-from-three-reviews outranking a
+                    # 4.6-from-eight-hundred.
+                    "places.primaryType", "places.types",
+                    "places.userRatingCount",
                 ]),
             },
             json={
@@ -63,12 +69,18 @@ def search_near(query: str, lat: float, lng: float, radius_km: float = 10.0,
             position = place.get("location") or {}
             if not (position.get("latitude") and position.get("longitude")):
                 continue          # unplaceable venue cannot be ranked
+            types = list(place.get("types") or [])
+            primary = place.get("primaryType")
+            if primary:
+                types.insert(0, primary)   # first recognised type wins in ranking
             out.append({
                 "name": place["displayName"]["text"],
                 "address": place.get("formattedAddress", ""),
                 "lat": float(position["latitude"]),
                 "lng": float(position["longitude"]),
                 "rating": place.get("rating"),
+                "rating_count": int(place.get("userRatingCount") or 0),
+                "types": types,
                 "price_level": (place.get("priceLevel", "")
                                 .removeprefix("PRICE_LEVEL_") or None),
                 "maps_url": place.get("googleMapsUri", ""),
