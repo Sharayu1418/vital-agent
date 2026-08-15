@@ -172,27 +172,16 @@ def test_retrieval_meets_the_gates(live_project):
     from vital import memory
 
     store = InMemoryStore(index=memory.index_config())
-    for fact in CORPUS:
-        memory.remember(store, "eval-user", "…", _fixed_extractor(memory, fact))
+    merges = _seed_and_record_merges(memory, store)
 
     stored = {m["fact"] for m in memory.all_memories(store, "eval-user")}
-    lost = [f for f in CORPUS if f not in stored]
-    if lost:
-        # Report WHICH facts were eaten and what swallowed them. "8 of 18
-        # merged" is a symptom; "'learning Spanish' merged into 'used to
-        # play the piano'" is a decision about the threshold.
+    if merges:
         threshold = memory.settings().memory_dedup_threshold
-        print(f"\n  {len(lost)} of {len(CORPUS)} facts merged away at "
-              f"threshold {threshold}:")
-        embed = memory.index_config()["embed"]
-        for fact in lost:
-            nearest, best = None, 0.0
-            for kept in stored:
-                similarity = memory.similarity(kept, fact, via=embed)
-                if similarity > best:
-                    nearest, best = kept, similarity
-            print(f"    {fact}")
-            print(f"      -> merged into {nearest}  ({best:.3f})")
+        print(f"\n  {len(merges)} facts merged at threshold {threshold}, "
+              "recorded AT WRITE TIME:")
+        for incoming, target, similarity in merges:
+            print(f"    {incoming}")
+            print(f"      -> matched {target}  ({similarity:.3f})")
 
     assert len(stored) >= len(CORPUS) - 2, (
         f"only {len(stored)} of {len(CORPUS)} facts stored — dedup is eating "
@@ -268,6 +257,48 @@ def test_the_user_prefix_is_not_flattening_similarity(live_project):
     if mean_with - mean_without > 0.05:
         print("    -> the prefix is measurably flattening similarity;"
               " worth storing facts without it")
+
+
+def _seed_and_record_merges(memory, store):
+    """Write the corpus, recording every merge AS IT HAPPENS.
+
+    The first version of this reconstructed merges afterwards by finding
+    each lost fact's nearest surviving neighbour. That gave nonsense —
+    "learning Spanish merged into rock climbing at 0.804", below the
+    threshold, which cannot happen.
+
+    The reconstruction was wrong because a merge OVERWRITES the row it
+    matched. So a row can be matched, overwritten, matched again by
+    something else, and overwritten again. Afterwards you can only see the
+    last text in that row, not the text that was actually compared against.
+    Inferring the cause from the end state gave a confident wrong answer —
+    which is the same mistake as every other harness bug in this project.
+
+    Wrapping duplicate_key records the real comparison: what came in, what
+    it matched, and the score at that moment.
+    """
+    recorded: list[tuple[str, str, float]] = []
+    original = memory.duplicate_key
+
+    def watched(store_arg, user_id, fact):
+        key = original(store_arg, user_id, fact)
+        if key is not None:
+            existing = {m["key"]: m["fact"]
+                        for m in memory.all_memories(store_arg, user_id)}
+            target = existing.get(key, "<unknown>")
+            embed = memory.index_config()["embed"]
+            recorded.append((fact, target,
+                             memory.similarity(target, fact, via=embed)))
+        return key
+
+    memory.duplicate_key = watched
+    try:
+        for fact in CORPUS:
+            memory.remember(store, "eval-user", "…",
+                            _fixed_extractor(memory, fact))
+    finally:
+        memory.duplicate_key = original
+    return recorded
 
 
 def _fixed_extractor(memory_mod, fact_text):
