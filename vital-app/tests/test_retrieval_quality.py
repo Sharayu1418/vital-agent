@@ -176,6 +176,24 @@ def test_retrieval_meets_the_gates(live_project):
         memory.remember(store, "eval-user", "…", _fixed_extractor(memory, fact))
 
     stored = {m["fact"] for m in memory.all_memories(store, "eval-user")}
+    lost = [f for f in CORPUS if f not in stored]
+    if lost:
+        # Report WHICH facts were eaten and what swallowed them. "8 of 18
+        # merged" is a symptom; "'learning Spanish' merged into 'used to
+        # play the piano'" is a decision about the threshold.
+        threshold = memory.settings().memory_dedup_threshold
+        print(f"\n  {len(lost)} of {len(CORPUS)} facts merged away at "
+              f"threshold {threshold}:")
+        embed = memory.index_config()["embed"]
+        for fact in lost:
+            nearest, best = None, 0.0
+            for kept in stored:
+                similarity = memory.similarity(kept, fact, via=embed)
+                if similarity > best:
+                    nearest, best = kept, similarity
+            print(f"    {fact}")
+            print(f"      -> merged into {nearest}  ({best:.3f})")
+
     assert len(stored) >= len(CORPUS) - 2, (
         f"only {len(stored)} of {len(CORPUS)} facts stored — dedup is eating "
         "distinct facts, which would make every number below meaningless")

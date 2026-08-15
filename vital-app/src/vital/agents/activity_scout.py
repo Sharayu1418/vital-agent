@@ -4,12 +4,14 @@ In Phase 1 this becomes a subgraph under the supervisor. Design rule (D1):
 it must only ever communicate through its input/output messages — no shared
 imports with other agents.
 """
+from langchain_core.tools import tool
 from langchain_google_vertexai import ChatVertexAI
 from langgraph.prebuilt import create_react_agent
 
 from vital.config import settings
 from vital.tools.places import search_places
 from vital.tools.weather import get_weather
+
 
 @tool
 def find_activities(query: str, limit: int = 3) -> dict:
