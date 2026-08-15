@@ -113,6 +113,38 @@ def reciprocal_rank(retrieved: list[str], expected: list[str]) -> float:
     return 0.0
 
 
+def test_every_live_eval_flag_disables_the_offline_stand_ins():
+    """The bug this eval hit on its first run.
+
+    conftest patches in a 16-dimension bag-of-words embedder so the offline
+    suite never touches a network. It only un-patched itself under
+    MEMORY_LIVE_EVAL, and this eval uses RETRIEVAL_EVAL — so a "live" run
+    scored the stand-in. Half the facts looked alike, dedup merged eight of
+    eighteen, and the numbers would have been fiction.
+
+    Every module that gates on an env var must have that var registered, or
+    the next eval silently measures the fake. Scanning for the flags rather
+    than listing them means a new eval is covered the day it is written.
+    """
+    import pathlib
+    import re
+
+    from conftest import LIVE_EVAL_FLAGS
+
+    tests_dir = pathlib.Path(__file__).resolve().parent
+    used = set()
+    for path in tests_dir.glob("test_*.py"):
+        for match in re.finditer(r'environ\.get\("([A-Z_]*(?:EVAL|EVALS))"\)',
+                                 path.read_text()):
+            used.add(match.group(1))
+
+    unregistered = used - set(LIVE_EVAL_FLAGS)
+    assert not unregistered, (
+        f"{sorted(unregistered)} gate a live eval but are not in "
+        "conftest.LIVE_EVAL_FLAGS, so those runs would score the offline "
+        "stand-in and report it as a real result")
+
+
 def test_the_metrics_are_right():
     """Guard the guard. A scoring bug would make every later number a
     fiction, and there is nothing to compare it against."""

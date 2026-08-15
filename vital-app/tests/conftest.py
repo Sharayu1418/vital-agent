@@ -22,6 +22,26 @@ os.environ["AUTH_REQUIRED"] = "false"  # anonymous access in tests by default
 
 import pytest
 
+# Every flag that means "this run wants REAL models, not the offline
+# stand-ins".
+#
+# This is a list rather than one flag because it already went wrong: the
+# retrieval eval was given RETRIEVAL_EVAL, offline_embeddings only checked
+# MEMORY_LIVE_EVAL, and so a live eval ran against the 16-dimension
+# bag-of-words stand-in. Half the facts looked alike, dedup merged eight of
+# eighteen, and the numbers would have been meaningless if a guard had not
+# caught it.
+#
+# Anything added here must be added to the fixtures below too. One list,
+# checked in one place, so a new eval cannot silently get the fake.
+LIVE_EVAL_FLAGS = ("MEMORY_LIVE_EVAL", "CRISIS_LIVE_EVAL", "RETRIEVAL_EVAL",
+                   "ANSWER_QUALITY_EVAL", "GROUNDING_LIVE_EVAL",
+                   "VITAL_LIVE_EVALS")
+
+
+def live_eval_requested() -> bool:
+    return any(os.environ.get(flag) == "1" for flag in LIVE_EVAL_FLAGS)
+
 
 @pytest.fixture
 def live_project():
@@ -94,7 +114,7 @@ def offline_embeddings(monkeypatch):
     the threshold was wrong when the real problem was the stand-in leaking
     in. Exactly the failure the crisis eval hit.
     """
-    if os.environ.get("MEMORY_LIVE_EVAL") == "1":
+    if live_eval_requested():
         yield          # MUST yield, not return — this is a generator fixture
         return
 
@@ -151,7 +171,7 @@ def offline_crisis_classifier(monkeypatch):
     real model. Reloading the module to undo this patch was too fragile —
     other modules keep a reference to the old one.
     """
-    if os.environ.get("CRISIS_LIVE_EVAL") == "1":
+    if live_eval_requested():
         return
 
     from vital import guardrails
