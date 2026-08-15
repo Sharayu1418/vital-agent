@@ -88,6 +88,50 @@ def _similarity(store, keeper: str, candidate: str) -> float | None:
     return memory.similarity(keeper, candidate, via=store)
 
 
+def _report_drift(store, user_id: str) -> None:
+    """How far rows have moved from the text they were created with.
+
+    Dedup used to be single-linkage: a merge overwrote the row it matched,
+    so the next fact was compared against whatever landed there last and a
+    row could walk away from its origin, absorbing facts it was never
+    measured against. Rows now carry an immutable `anchor` and a merge has
+    to clear the threshold against both.
+
+    Two honest limits on what this can tell you.
+
+    A row with no anchor predates the fix. It may or may not have absorbed
+    something; the absorbed text was overwritten, so there is nothing left
+    to detect it with. Those losses are NOT RECOVERABLE and this report will
+    never surface them — the count of un-anchored rows is the size of the
+    blind spot, not the size of the damage.
+
+    A row whose anchor differs from its fact has absorbed at least one
+    merge. That is normal and usually correct: "moved to Brooklyn" SHOULD
+    replace "lives in Albany". It is only worth a look when the similarity
+    is low, which now cannot happen going forward, so a low number here is
+    the thing to check after the fix ships.
+    """
+    rows = memory.all_memories(store, user_id)
+    unanchored = [r for r in rows if not r.get("anchor")]
+    drifted = [r for r in rows
+               if r.get("anchor") and r["anchor"] != r["fact"]]
+
+    if unanchored:
+        print(f"    {len(unanchored)} row(s) predate anchoring — any facts "
+              "they absorbed are unrecoverable and invisible here")
+    if not drifted:
+        return
+    print(f"    {len(drifted)} row(s) have absorbed a merge:")
+    for row in drifted:
+        score = _similarity(store, row["anchor"], row["fact"])
+        flag = "  <-- below threshold, would not merge today" if (
+            score is not None
+            and score < settings().memory_dedup_threshold) else ""
+        shown = "n/a" if score is None else f"{score:.3f}"
+        print(f"      {row['fact']!r}")
+        print(f"        anchored to {row['anchor']!r} ({shown}){flag}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true",
@@ -117,6 +161,7 @@ def main() -> int:
         for fact, into in merged:
             print(f"    merge  {fact!r}")
             print(f"      into {into!r}")
+        _report_drift(store, user_id)
 
         if not args.apply:
             continue
@@ -129,7 +174,13 @@ def main() -> int:
         for row in kept:
             store.put(memory._ns(user_id), row["key"],
                       {"fact": row["fact"],
-                       "confidence": row.get("confidence", 0.9)})
+                       "confidence": row.get("confidence", 0.9),
+                       # A survivor of THIS pass is anchored to its own text.
+                       # Any anchor it carried belonged to a row that has just
+                       # been re-clustered from scratch, so keeping it would
+                       # anchor the row to a comparison that no longer
+                       # happened.
+                       "anchor": row["fact"]})
 
     verb = "Wrote" if args.apply else "Would write"
     print(f"\n{verb}: {total_kept} facts kept, {total_merged} merged away.")

@@ -155,6 +155,17 @@ def similarity(a: str, b: str, via=None) -> float:
 DEDUP_CANDIDATES = 5
 
 
+def anchor_of(value: dict) -> str:
+    """The text a row was CREATED with, which never changes.
+
+    Rows written before anchors existed do not have one. Falling back to the
+    current fact makes those rows behave exactly as they did before rather
+    than failing every comparison, so no migration is required — an old row
+    simply gets the anchor rule applied from the next time it is touched.
+    """
+    return (value or {}).get("anchor") or (value or {}).get("fact") or ""
+
+
 def duplicate_key(store, user_id: str, fact: str) -> str | None:
     """Key of an existing fact this one should REPLACE, or None.
 
@@ -170,24 +181,52 @@ def duplicate_key(store, user_id: str, fact: str) -> str | None:
     a threshold calibrated against the tests (InMemoryStore) collapsed every
     distinct fact into one row in production (Postgres). Re-scoring here
     makes the decision depend only on the model, never on the backend.
+
+    A MERGE MUST CLEAR THE THRESHOLD TWICE — against the row's current text
+    AND against its anchor.
+
+    Requiring only the current text is single-linkage clustering, and single
+    linkage chains. Because a merge overwrites the row it matched, the thing
+    the next fact gets compared against is whatever landed there last, so a
+    cluster walks: A absorbs B, then C is judged against B and absorbs the
+    row, and A and C end up merged having never been compared. A probe with
+    a controlled embedder collapsed a pair 0.697 apart at a 0.87 threshold —
+    which is why eighteen distinct facts became ten in the retrieval eval.
+
+    Raising the threshold does not help; it only makes the chain longer. The
+    fix has to be structural. The anchor never moves, so it bounds how far a
+    row can drift from where it started, while still letting a genuinely
+    updated fact ("moved to Brooklyn") replace the one it supersedes.
     """
     hits = store.search(_ns(user_id), query=fact, limit=DEDUP_CANDIDATES)
-    candidates = [(h.key, (h.value or {}).get("fact") or "") for h in hits]
-    candidates = [(key, text) for key, text in candidates if text]
+    candidates = [(h.key, (h.value or {}).get("fact") or "",
+                   anchor_of(h.value)) for h in hits]
+    candidates = [(key, text, anchor) for key, text, anchor in candidates
+                  if text]
     if not candidates:
         return None
 
-    # One batched call: the incoming fact plus every candidate, all as
-    # documents.
-    vectors = _as_documents(_embedder(store),
-                            [fact] + [text for _, text in candidates])
-    incoming, stored = vectors[0], vectors[1:]
+    # One batched call for everything. Anchors are usually identical to the
+    # current text — a row is only ever anchored to something different once
+    # it has absorbed a fact — so embed the DISTINCT strings and look each
+    # one up, rather than paying for the same text twice per candidate.
+    wanted = [fact]
+    for _, text, anchor in candidates:
+        wanted += [text, anchor]
+    distinct = list(dict.fromkeys(wanted))
+    vectors = dict(zip(distinct, _as_documents(_embedder(store), distinct)))
+    incoming = vectors[fact]
 
-    best_key, best_score = None, settings().memory_dedup_threshold
-    for (key, _), vector in zip(candidates, stored):
-        score = _cosine(incoming, vector)
-        if score >= best_score:
-            best_key, best_score = key, score
+    threshold = settings().memory_dedup_threshold
+    best_key, best_score = None, threshold
+    for key, text, anchor in candidates:
+        current_score = _cosine(incoming, vectors[text])
+        if current_score < threshold:
+            continue
+        if _cosine(incoming, vectors[anchor]) < threshold:
+            continue        # the row has drifted; this would be a chain
+        if current_score >= best_score:
+            best_key, best_score = key, current_score
     return best_key
 
 
@@ -206,9 +245,20 @@ def remember(store, user_id: str, transcript: str, llm) -> int:
         if fact.confidence < CONFIDENCE_FLOOR:
             continue
         try:
-            key = duplicate_key(store, user_id, fact.fact) or uuid.uuid4().hex
+            key = duplicate_key(store, user_id, fact.fact)
+            if key is None:
+                key, anchor = uuid.uuid4().hex, fact.fact
+            else:
+                # Carry the original text forward. This is the whole point of
+                # the anchor: if the merge overwrote it too, the row would
+                # re-anchor to its newest text every time and chaining would
+                # be back, just one write later.
+                existing = store.get(_ns(user_id), key)
+                anchor = anchor_of(existing.value if existing else None) \
+                    or fact.fact
             store.put(_ns(user_id), key,
-                      {"fact": fact.fact, "confidence": fact.confidence})
+                      {"fact": fact.fact, "confidence": fact.confidence,
+                       "anchor": anchor})
         except Exception:
             # embedding/store failure: one fact goes unsaved, the turn is
             # untouched. Deliberately not a partial write — storing without

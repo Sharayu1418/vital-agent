@@ -69,6 +69,107 @@ def test_similar_fact_overwrites_instead_of_duplicating(store, monkeypatch):
     assert mems[0]["fact"] == "User lives in Brooklyn NY"
 
 
+def test_dedup_does_not_chain(monkeypatch):
+    """Three facts, laid out so the ends are nowhere near each other.
+
+    THE BUG THIS EXISTS FOR
+    -----------------------
+    A merge overwrites the row it matched. So whatever landed last is what
+    the next fact gets compared against, and a cluster can walk: A absorbs
+    B, then C is judged against B, absorbs the row, and A and C end up
+    merged having never once been compared. Single-linkage clustering, and
+    single linkage chains — this is its textbook failure.
+
+    In the retrieval eval it turned eighteen distinct facts into ten, and it
+    destroyed the absorbed text on the way, which is why reconstructing the
+    merges afterwards produced impossible sub-threshold numbers.
+
+    Raising the threshold is not a fix and this test is built to show why:
+    the endpoints below are 0.697 apart and the threshold is 0.87. A higher
+    bar only demands a longer chain.
+
+    The embedder is three points on a unit circle rather than the shared
+    offline fake, because the whole test is about exact distances and a
+    bag-of-words proxy cannot place them.
+    """
+    import math
+
+    angle = 0.40                      # neighbours ~0.92, ends ~0.70
+    positions = {"A": 0.0, "B": angle, "C": 2 * angle}
+
+    def embed(texts):
+        out = []
+        for text in texts:
+            radians = next((r for name, r in positions.items()
+                            if text.startswith(name)), 0.0)
+            out.append([math.cos(radians), math.sin(radians)])
+        return out
+
+    monkeypatch.setenv("EMBEDDING_DIMS", "2")
+    monkeypatch.setenv("MEMORY_DEDUP_THRESHOLD", "0.87")
+    settings.cache_clear()
+    monkeypatch.setattr(memory, "_embeddings", lambda: embed)
+    memory.get_store.cache_clear()
+
+    # State the geometry, so a future reader can see the endpoints really
+    # are far apart and the test is not passing by accident.
+    assert memory.similarity("A fact", "B fact", via=embed) > 0.87
+    assert memory.similarity("B fact", "C fact", via=embed) > 0.87
+    assert memory.similarity("A fact", "C fact", via=embed) < 0.87
+
+    chained = InMemoryStore(index=memory.index_config())
+    for name in ("A", "B", "C"):
+        memory.remember(chained, "u1", "…",
+                        FakeExtractor([Fact(fact=f"{name} fact",
+                                            confidence=0.9)]))
+
+    facts = sorted(m["fact"] for m in memory.all_memories(chained, "u1"))
+    assert facts == ["B fact", "C fact"], (
+        f"expected C to start its own row, got {facts} — a fact merged into "
+        "a row it was never compared against")
+
+
+def test_a_merge_keeps_the_row_anchored_to_its_original_text(store, monkeypatch):
+    """What stops chaining coming back one write later.
+
+    The anchor is only useful if a merge leaves it alone. If the write
+    re-anchored the row to its newest text, every row would re-anchor on
+    every merge and the comparison would be back to single linkage.
+    """
+    monkeypatch.setenv("MEMORY_DEDUP_THRESHOLD", "0.5")
+    settings.cache_clear()
+    memory.remember(store, "u1", "…",
+                    FakeExtractor([Fact(fact="User lives in Brooklyn",
+                                        confidence=0.9)]))
+    memory.remember(store, "u1", "…",
+                    FakeExtractor([Fact(fact="User lives in Brooklyn NY",
+                                        confidence=0.95)]))
+    row = memory.all_memories(store, "u1")[0]
+    assert row["fact"] == "User lives in Brooklyn NY"      # current text moves
+    assert row["anchor"] == "User lives in Brooklyn"       # anchor does not
+
+
+def test_a_row_written_before_anchors_existed_still_works(store, monkeypatch):
+    """Production rows predate this field. They must not fail every
+    comparison and fragment into duplicates — falling back to the current
+    fact makes an un-anchored row behave exactly as it did before, and it
+    picks up a real anchor the next time it is written."""
+    monkeypatch.setenv("MEMORY_DEDUP_THRESHOLD", "0.5")
+    settings.cache_clear()
+    store.put(memory._ns("u1"), "legacy",
+              {"fact": "User lives in Brooklyn", "confidence": 0.9})
+
+    assert memory.anchor_of({"fact": "User lives in Brooklyn"}) == \
+        "User lives in Brooklyn"
+
+    memory.remember(store, "u1", "…",
+                    FakeExtractor([Fact(fact="User lives in Brooklyn NY",
+                                        confidence=0.95)]))
+    mems = memory.all_memories(store, "u1")
+    assert len(mems) == 1                      # matched the legacy row
+    assert mems[0]["anchor"] == "User lives in Brooklyn"
+
+
 def test_a_fact_below_the_threshold_is_kept_alongside(store, monkeypatch):
     """The other half of the mechanism: dissimilar facts must coexist, or
     dedup would quietly eat unrelated memories."""
