@@ -305,12 +305,54 @@ def recall(store, user_id: str, query: str, limit: int | None = None) -> list[st
         hits = store.search(_ns(user_id), query=query, limit=limit)
         return [h.value["fact"] for h in hits]
     except Exception:
-        items = list(store.search(_ns(user_id)))[:limit]
+        # Ask for `limit` rather than taking the default page and slicing it.
+        # Slicing an unbounded-looking search is the same mistake that made
+        # all_memories return ten rows: it reads as "everything, trimmed" and
+        # is really "the first ten, trimmed". Harmless while recall_limit is
+        # below ten, wrong and silent the day it is raised.
+        items = store.search(_ns(user_id), limit=limit)
         return [i.value["fact"] for i in items]
 
 
+# One page of a full scan. Large enough that a normal profile is a single
+# round trip, small enough not to build a huge list in one go.
+SCAN_PAGE = 200
+
+# A full scan should never need this many pages. It exists so a backend that
+# ignores `offset` cannot spin here forever — a bug should surface as a
+# wrong number, not a hung request.
+MAX_SCAN_PAGES = 500
+
+
 def all_memories(store, user_id: str) -> list[dict]:
-    return [{"key": i.key, **i.value} for i in store.search(_ns(user_id))]
+    """EVERY fact for this user. Paginated, deliberately.
+
+    store.search defaults to limit=10 and this function used to pass no
+    limit, so it silently returned the first ten rows and nothing else. It
+    reads like a full scan, it is named like a full scan, and it was not one.
+
+    That default is what turned the retrieval eval into a three-stage goose
+    chase. Eighteen facts went in, every write reported success, exactly one
+    merge was recorded — and the harness insisted ten were stored, because
+    ten was all it could ever see. The "seven missing facts" were in the
+    store the whole time.
+
+    It was worse in production than in the eval. recommend._preferences
+    builds the user's likes and dislikes from this list, so ranking only ever
+    considered the first ten things VITAL knew about someone, and the profile
+    endpoint showed them the same truncated set. Neither would ever look
+    broken; you would just quietly stop being recommended things you like
+    once you passed ten facts.
+    """
+    out: list[dict] = []
+    offset = 0
+    for _ in range(MAX_SCAN_PAGES):
+        page = store.search(_ns(user_id), limit=SCAN_PAGE, offset=offset)
+        out += [{"key": i.key, **i.value} for i in page]
+        if len(page) < SCAN_PAGE:
+            break
+        offset += SCAN_PAGE
+    return out
 
 
 def forget(store, user_id: str, key: str) -> None:

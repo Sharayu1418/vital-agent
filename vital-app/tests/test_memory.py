@@ -69,6 +69,67 @@ def test_similar_fact_overwrites_instead_of_duplicating(store, monkeypatch):
     assert mems[0]["fact"] == "User lives in Brooklyn NY"
 
 
+def test_all_memories_returns_more_than_one_page(store):
+    """The most expensive one-word bug in this project.
+
+    store.search defaults to limit=10. all_memories passed no limit, so a
+    function named "all" returned the first ten rows and stopped. Nothing
+    errored, nothing logged, and the number it returned was plausible.
+
+    It cost three rounds of investigation on the retrieval eval — eighteen
+    facts in, every write reporting success, exactly one merge recorded, and
+    a stubborn count of ten. The missing facts were in the store the whole
+    time.
+
+    Production was worse off than the eval. recommend._preferences builds a
+    user's likes and dislikes from this list, so ranking only ever saw the
+    first ten things VITAL knew about someone, and the profile endpoint
+    showed the same truncated set. It would never look broken — you would
+    just stop getting recommendations that matched you once you passed ten
+    facts.
+
+    So the count here is deliberately just over the default. Every earlier
+    test in this file uses a handful of facts, which is precisely why none of
+    them noticed.
+    """
+    for i in range(25):
+        store.put(memory._ns("u1"), f"k{i}",
+                  {"fact": f"User fact number {i}", "confidence": 0.9,
+                   "anchor": f"User fact number {i}"})
+
+    facts = memory.all_memories(store, "u1")
+    assert len(facts) == 25, (
+        f"all_memories returned {len(facts)} of 25 — it is paging and "
+        "stopping, which makes every count built on it quietly wrong")
+
+
+def test_recall_fallback_can_return_its_full_limit(store):
+    """The same defaulting mistake, one line further down.
+
+    The degraded path took the default page and sliced it to `limit`. That
+    is correct only while memory_recall_limit stays under ten — raise it and
+    the fallback silently keeps returning ten.
+    """
+    for i in range(25):
+        store.put(memory._ns("u1"), f"k{i}",
+                  {"fact": f"User fact number {i}", "confidence": 0.9})
+
+    class VectorSearchDown:
+        """Only the ranked path fails. A store that refused everything would
+        exercise nothing, since the fallback reads from the same store."""
+
+        def __init__(self, inner):
+            self.inner = inner
+
+        def search(self, namespace, **kwargs):
+            if kwargs.get("query") is not None:
+                raise RuntimeError("vector index unavailable")
+            return self.inner.search(namespace, **kwargs)
+
+    assert len(memory.recall(VectorSearchDown(store), "u1",
+                             "anything", limit=15)) == 15
+
+
 def test_a_failed_write_is_logged_not_swallowed(store, monkeypatch, caplog):
     """The bug that cost the most time in this codebase, and the cheapest to
     have avoided.
