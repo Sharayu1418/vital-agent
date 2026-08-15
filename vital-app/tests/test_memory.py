@@ -69,6 +69,48 @@ def test_similar_fact_overwrites_instead_of_duplicating(store, monkeypatch):
     assert mems[0]["fact"] == "User lives in Brooklyn NY"
 
 
+def test_a_failed_write_is_logged_not_swallowed(store, monkeypatch, caplog):
+    """The bug that cost the most time in this codebase, and the cheapest to
+    have avoided.
+
+    remember() catches everything so memory can never break a turn. That is
+    right. But it caught and logged NOTHING, while the docstring claimed the
+    miss "surfaces through tool-health logging" — a safety net described and
+    never built.
+
+    The consequence: the retrieval eval stored 10 of 18 facts, and because
+    dedup was the only part of the write path that reported anything, every
+    hypothesis went there. Fixing dedup properly dropped merges from eight to
+    one and the count stayed at ten. Seven facts had been failing here the
+    whole time, silently.
+
+    The turn must still survive, so this asserts both halves: the write is
+    swallowed AND it is reported.
+    """
+    import logging
+
+    monkeypatch.setattr(memory, "duplicate_key",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            RuntimeError("embedding backend unreachable")))
+
+    with caplog.at_level(logging.INFO, logger="vital.metrics"):
+        stored = memory.remember(
+            store, "u1", "…",
+            FakeExtractor([Fact(fact="User lives in Brooklyn",
+                                confidence=0.9)]))
+
+    assert stored == 0                                  # the turn survives
+    assert memory.all_memories(store, "u1") == []       # no partial write
+
+    logged = " ".join(r.message for r in caplog.records)
+    assert "memory.remember" in logged and '"outcome": "error"' in logged, (
+        f"a failed memory write produced no error log: {logged!r} — this is "
+        "how seven lost facts stayed invisible behind a dedup investigation")
+    assert "embedding backend unreachable" in logged, (
+        "the log must carry the cause; 'something failed' sends you back to "
+        "guessing, which is the whole problem")
+
+
 def test_dedup_does_not_chain(monkeypatch):
     """Three facts, laid out so the ends are nowhere near each other.
 

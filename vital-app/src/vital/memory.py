@@ -29,6 +29,8 @@ from functools import lru_cache
 
 from pydantic import BaseModel, Field
 
+from vital import metrics
+
 from vital.config import settings
 
 NAMESPACE_SUFFIX = "profile"
@@ -236,6 +238,20 @@ def remember(store, user_id: str, transcript: str, llm) -> int:
     An embedding failure skips the WRITE and leaves the conversation alone —
     memory must never break a turn. The miss surfaces through tool-health
     logging rather than the user.
+
+    THAT SENTENCE USED TO BE FALSE, which is worth keeping written down.
+
+    The except below swallowed the failure and logged NOTHING. The docstring
+    claimed a safety net that had never been built, so a fact that failed to
+    write left no trace anywhere — not in the logs, not in the return count's
+    surroundings, nowhere. It cost a day: the retrieval eval stored 10 of 18
+    facts and every hypothesis went to dedup, because dedup was the only part
+    of the path that reported anything. After the chaining fix dropped merges
+    from eight to one, ten facts were still missing seven that nothing had
+    merged. They had been failing here the whole time, invisibly.
+
+    A comment describing behaviour nobody implemented is worse than no
+    comment, because it is where you stop looking.
     """
     result: FactList = llm.with_structured_output(FactList).invoke(
         EXTRACT_PROMPT.format(transcript=transcript))
@@ -259,10 +275,18 @@ def remember(store, user_id: str, transcript: str, llm) -> int:
             store.put(_ns(user_id), key,
                       {"fact": fact.fact, "confidence": fact.confidence,
                        "anchor": anchor})
-        except Exception:
+        except Exception as exc:
             # embedding/store failure: one fact goes unsaved, the turn is
             # untouched. Deliberately not a partial write — storing without
             # a vector would create a memory the agent can never retrieve.
+            #
+            # Swallowing it is still right — memory must not break a turn —
+            # but swallowing it SILENTLY is what hid seven lost facts behind
+            # a dedup investigation. Same shape as every tool failure in this
+            # codebase, so it goes through the same channel and the same
+            # alert on error rate.
+            metrics.log_tool(user_id, "memory.remember", "error",
+                             error=f"{type(exc).__name__}: {exc}")
             continue
         stored += 1
     return stored

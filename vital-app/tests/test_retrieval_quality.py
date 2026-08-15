@@ -172,7 +172,7 @@ def test_retrieval_meets_the_gates(live_project):
     from vital import memory
 
     store = InMemoryStore(index=memory.index_config())
-    merges = _seed_and_record_merges(memory, store)
+    merges, failures = _seed_and_record_merges(memory, store)
 
     stored = {m["fact"] for m in memory.all_memories(store, "eval-user")}
     if merges:
@@ -182,9 +182,27 @@ def test_retrieval_meets_the_gates(live_project):
         for incoming, target, similarity in merges:
             print(f"    {incoming}")
             print(f"      -> matched {target}  ({similarity:.3f})")
+    if failures:
+        print(f"\n  {len(failures)} facts FAILED TO WRITE:")
+        for fact in failures:
+            print(f"    {fact}")
 
+    # Account for every fact before drawing any conclusion. The first version
+    # of this asserted only on the total and blamed dedup in the message —
+    # so when writes started failing, the eval confidently reported a dedup
+    # problem. Seven facts were lost to a silent `except` for a day because
+    # the harness named a cause instead of reporting a number.
+    assert not failures, (
+        f"{len(failures)} of {len(CORPUS)} facts failed to write. This is NOT "
+        "a dedup problem — memory.remember logs the reason under "
+        'metric="tool_call", tool="memory.remember". Read that before '
+        "touching the threshold.")
+    assert len(stored) + len(merges) == len(CORPUS), (
+        f"{len(stored)} stored + {len(merges)} merged != {len(CORPUS)} "
+        "seeded — facts are disappearing through a path this harness cannot "
+        "see, which is the one situation where every number below is fiction")
     assert len(stored) >= len(CORPUS) - 2, (
-        f"only {len(stored)} of {len(CORPUS)} facts stored — dedup is eating "
+        f"only {len(stored)} of {len(CORPUS)} facts stored — dedup is merging "
         "distinct facts, which would make every number below meaningless")
 
     at1 = at3 = at5 = mrr = 0.0
@@ -278,6 +296,7 @@ def _seed_and_record_merges(memory, store):
     it matched, and the score at that moment.
     """
     recorded: list[tuple[str, str, float]] = []
+    failures: list[str] = []
     original = memory.duplicate_key
 
     def watched(store_arg, user_id, fact):
@@ -294,11 +313,16 @@ def _seed_and_record_merges(memory, store):
     memory.duplicate_key = watched
     try:
         for fact in CORPUS:
-            memory.remember(store, "eval-user", "…",
-                            _fixed_extractor(memory, fact))
+            # remember() returns the number it actually stored. Zero means
+            # the write raised and was swallowed — which is survivable in
+            # production and fatal to an eval, because the fact is simply
+            # absent and every explanation points at dedup instead.
+            if memory.remember(store, "eval-user", "…",
+                               _fixed_extractor(memory, fact)) == 0:
+                failures.append(fact)
     finally:
         memory.duplicate_key = original
-    return recorded
+    return recorded, failures
 
 
 def _fixed_extractor(memory_mod, fact_text):
