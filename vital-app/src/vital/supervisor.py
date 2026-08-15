@@ -23,7 +23,9 @@ ROUTER_PROMPT = """You route user messages to the right VITAL agent.
 
 Agents:
 - activity_scout: finding things to DO — activities, venues, weekend options
-- sleep_energy: sleep quality, tiredness, energy management, logging sleep
+- sleep_energy: sleep quality, tiredness, energy management, logging sleep,
+  and ANY question about the energy forecast itself — when they will be
+  sharp, why the prediction says what it does, how confident it is
 - idea_generator: directionless energy, wanting projects/hobbies/purpose
 - people_connector: finding PEOPLE — groups, communities, meetups, events to
   attend with others, 'who else does X'
@@ -39,6 +41,8 @@ Examples:
 "slept 4 hours, still want to go out tonight" -> sleep_energy  (health first)
 "are there pottery groups near me?" -> people_connector
 "I want to meet people who are into climbing" -> people_connector
+"why is my forecast still generic?" -> sleep_energy  (about the forecast, not a schedule)
+"when will I be sharpest today?" -> sleep_energy
 "ok, plan my weekend around all this" -> planner
 "put the run and the meetup on my calendar" -> planner
 "thanks, that's all" -> FINISH

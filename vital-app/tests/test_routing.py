@@ -18,6 +18,14 @@ CASES = [
     ("log my sleep: bed at 1am, up at 7, quality 2", "sleep_energy"),
     ("why am I always tired at 3pm", "sleep_energy"),
     ("slept 4 hours but still want to go out tonight", "sleep_energy"),
+    # Observed in production going to the PLANNER, which answered with its
+    # empty-plan message — "we haven't talked about what you want to do" —
+    # to somebody asking about their forecast. Questions ABOUT the forecast
+    # belong to the agent that owns it; only "build me a schedule" is
+    # planning.
+    ("why is my forecast still generic?", "sleep_energy"),
+    ("how accurate is my energy prediction?", "sleep_energy"),
+    ("when will I be sharpest today?", "sleep_energy"),
     ("bored, what should I do this weekend", "activity_scout"),
     ("find me something fun near Prospect Park", "activity_scout"),
     ("it's raining, what can I do indoors today", "activity_scout"),
