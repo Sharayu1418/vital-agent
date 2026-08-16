@@ -268,7 +268,7 @@ def test_the_user_prefix_is_not_flattening_similarity(live_project):
 
     mean_with = sum(with_prefix) / len(with_prefix)
     mean_without = sum(without) / len(without)
-    print(f"\n  mean similarity between UNRELATED facts")
+    print("\n  mean similarity between UNRELATED facts")
     print(f"    with 'User' prefix:    {mean_with:.3f}")
     print(f"    without:               {mean_without:.3f}")
     print(f"    difference:            {mean_with - mean_without:+.3f}")

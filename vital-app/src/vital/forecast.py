@@ -53,7 +53,6 @@ below 1.0 on purpose. A population curve for a stranger should say so.
 from __future__ import annotations
 
 import math
-import statistics
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 

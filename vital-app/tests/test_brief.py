@@ -9,7 +9,7 @@ Two of these tests protect properties that fail silently and would never be
 reported as bugs: sending twice, and sending filler.
 """
 import os
-from datetime import datetime, time, timedelta
+from datetime import datetime
 
 os.environ.setdefault("GOOGLE_CLOUD_PROJECT", "test")
 os.environ.setdefault("OPENWEATHER_API_KEY", "test")

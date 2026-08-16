@@ -47,6 +47,12 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
+          # uv.lock lives in vital-app, not the repo root. Without this the
+          # action logged "No file matched to [**/uv.lock,**/requirements*.txt]
+          # — the cache will never get invalidated" and then happily served a
+          # cache keyed on nothing, so a dependency change would not have
+          # produced a fresh install.
+          cache-dependency-glob: vital-app/uv.lock
 
       - name: Install dependencies
         run: uv sync --all-extras
@@ -58,9 +64,22 @@ jobs:
       - name: Run tests
         run: uv run pytest -q
 
+      # Blocking, as of the run where somebody finally read the annotations.
+      #
+      # This was `continue-on-error: true`, described as "advisory for now".
+      # What that produced was a job reporting SUCCESS with a red "Process
+      # completed with exit code 1" annotation nobody looked at, on every run,
+      # for the life of the file. An advisory check that is always failing
+      # carries exactly as much information as no check.
+      #
+      # The backlog turned out to be nine unused imports and one f-string.
+      # Ruff is pinned through uv.lock, which matters more than it sounds:
+      # running a NEWER ruff locally reported 261 problems, because the
+      # default rule set expands between releases. Lint that disagrees with
+      # itself across machines is the advisory-check failure again in a
+      # different costume.
       - name: Lint
         run: uv run ruff check src tests scripts
-        continue-on-error: true   # advisory for now; not a merge blocker
 
   frontend:
     name: frontend build
@@ -78,7 +97,9 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # 20 reached end of life in April 2026 — no security patches. The
+          # frontend suite passes on 22; verified locally on 22.22.
+          node-version: 22
           cache: pnpm
           cache-dependency-path: vital-web/pnpm-lock.yaml
 

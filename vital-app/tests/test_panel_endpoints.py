@@ -44,8 +44,13 @@ def test_sleep_recent_reads_manual_logs_for_the_caller_not_stale_context(monkeyp
     # poison the contextvar — the endpoint must set identity itself
     storage.current_user_id.set("someone-else-entirely")
 
-    from datetime import date
-    today = date.today().isoformat()
+    # storage.local_today(), NOT date.today(). date.today() reads the machine's
+    # timezone; log_sleep files under local_today(), which is UTC plus the
+    # caller's declared offset. Those agree only when the developer's box
+    # happens to be on UTC — so this passed in CI forever and failed on a Mac
+    # in New York every evening after 8pm, the exact hours in the exact
+    # timezone this test was written to protect.
+    today = storage.local_today().isoformat()
     body = client.get("/sleep/recent").json()
     assert body["target_min"] == 480
     by_date = {n["date"]: n for n in body["nights"]}
@@ -60,8 +65,7 @@ def test_sleep_recent_upload_wins_on_date_conflict(monkeypatch):
     user_id = _session_user(client)
     storage.current_user_id.set(user_id)
     storage.log_sleep("23:00", "07:00", 3)          # today, manual, 480min
-    from datetime import date
-    today = date.today().isoformat()
+    today = storage.local_today().isoformat()       # not date.today() — see above
     ingest.save_sleep_data(user_id, [
         {"date": today, "duration_min": 450, "quality": "", "source": "csv_upload"},
     ])
@@ -275,3 +279,50 @@ def test_malformed_xml_is_422_not_500(monkeypatch):
     client = _client(monkeypatch)
     r = _upload(client, "export.xml", b"<HealthData><Record></HealthDat")
     assert r.status_code == 422
+
+
+def test_no_test_files_the_date_from_the_machine_clock():
+    """date.today() and datetime.now() read the DEVELOPER'S timezone.
+
+    The app never does. Sleep logs are filed under storage.local_today() —
+    UTC plus the offset the caller declared — so a test that builds an
+    expected date from the machine clock is asserting against a different
+    calendar than the code uses. They agree only on a UTC box.
+
+    That is why this suite was green in CI for months and failed on a Mac in
+    New York after 8pm. The test it broke was the regression test for the
+    timezone bug, in the same timezone, in the same evening hours it was
+    written to protect against. A test that only passes where the bug cannot
+    happen is not testing anything.
+
+    Parsed rather than grepped. The first version was a regex and matched its
+    own docstring, plus the comment explaining the fix and the sentence in
+    test_forecast describing the rule — three false positives out of three
+    hits. An AST walk sees calls and cannot see prose.
+    """
+    import ast
+    import pathlib
+
+    offenders = []
+    for path in sorted(pathlib.Path(__file__).resolve().parent.glob("test_*.py")):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not isinstance(func, ast.Attribute):
+                continue
+            # date.today() / datetime.date.today()
+            naive_today = func.attr == "today"
+            # datetime.now() with no tz. datetime.now(timezone.utc) is
+            # explicit about which clock it means, so it is allowed.
+            naive_now = (func.attr == "now"
+                         and not node.args and not node.keywords)
+            if naive_today or naive_now:
+                offenders.append(
+                    f"{path.name}:{node.lineno}: {ast.unparse(node)}")
+
+    assert not offenders, (
+        "these read the machine's timezone instead of storage.local_today() "
+        "or an injected clock, so they pass or fail depending on where and "
+        "when they run:\n  " + "\n  ".join(offenders))

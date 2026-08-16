@@ -19,7 +19,6 @@ Checks the SHAPE of the deployment, not business logic. The test suite
 covers behaviour; this covers "did the configuration land".
 """
 import argparse
-import sys
 import urllib.error
 import urllib.request
 

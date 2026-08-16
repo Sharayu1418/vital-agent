@@ -11,7 +11,7 @@ what stops an attacker linking THEIR Fitbit account to YOUR VITAL account,
 which would silently drive your forecast and every plan built on it.
 """
 import os
-from datetime import date, datetime, time
+from datetime import date, time
 
 os.environ.setdefault("GOOGLE_CLOUD_PROJECT", "test")
 os.environ.setdefault("OPENWEATHER_API_KEY", "test")
@@ -325,7 +325,8 @@ def test_a_tampered_state_is_rejected(configured):
 
 
 def test_an_unsigned_state_is_rejected(configured):
-    import base64, json
+    import base64
+    import json
     payload = {"s": "x" * 32, "p": "google-health", "e": 9_999_999_999, "n": "n"}
     body = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
     with pytest.raises(oauth_state.StateError):

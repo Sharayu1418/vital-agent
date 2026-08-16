@@ -16,7 +16,6 @@ os.environ.setdefault("OPENWEATHER_API_KEY", "test")
 os.environ.setdefault("GOOGLE_PLACES_API_KEY", "test")
 os.environ.setdefault("SESSION_COOKIE_SECURE", "false")
 
-import pytest
 
 from vital import ranking
 from vital.ranking import Candidate

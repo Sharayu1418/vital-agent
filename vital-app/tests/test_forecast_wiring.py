@@ -10,7 +10,7 @@ test_people_connector.py exists because a previous version of that check
 passed while the tool was unwired.
 """
 import os
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 
 os.environ.setdefault("GOOGLE_CLOUD_PROJECT", "test")
 os.environ.setdefault("OPENWEATHER_API_KEY", "test")
