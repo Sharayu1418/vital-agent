@@ -6,9 +6,14 @@
  * that has nothing to do with VITAL.
  *
  * A server component on purpose: skyColor is pure and there are no hooks, so
- * nothing here needs to run in the browser — and the notFound() below is then
- * evaluated at build time, which means the route is genuinely absent from the
- * production bundle rather than hidden by a runtime check.
+ * none of this needs to run in the browser, and the palette never reaches a
+ * client bundle.
+ *
+ * To be accurate about what the gate does: the route still EXISTS in a
+ * production build — `next build` lists it at ~123 B — and is prerendered as
+ * the not-found page. It returns 404, which is the point, but "absent from
+ * the bundle" would be an overclaim. Verify with `pnpm build && pnpm start`
+ * then curl the path; do not take this comment's word for it.
  *
  * A route rather than a standalone HTML file. The first version was
  * scripts/sky-preview.html opened with file://, where the browser refuses an
