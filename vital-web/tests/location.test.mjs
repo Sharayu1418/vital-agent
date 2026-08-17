@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  fetchElevation, formatLocationLabel, geocodeLocation, shouldRequestDeviceLocation,
+  fetchElevation, formatLocationLabel, resolveElevation, geocodeLocation, shouldRequestDeviceLocation,
 } from "../app/lib/location.js";
 
 test("device location is requested only in the signed-in app", () => {
@@ -141,4 +141,55 @@ test("fetchElevation accepts a bare number too", async () => {
   // becomes {"elevation":n} the theme should lose nothing.
   const stub = async () => ({ ok: true, json: async () => ({ elevation: 1614 }) });
   assert.equal(await fetchElevation(39.74, -104.98, stub), 1614);
+});
+
+
+// ---------- "we don't know" must not look like "sea level" ----------
+
+test("a device altitude is used without any network call", async () => {
+  // Phones outdoors report altitude directly. Free, and nothing leaves the
+  // browser — strictly better than a lookup when it is available.
+  const never = async () => { throw new Error("must not be called"); };
+  const got = await resolveElevation(
+    { coords: { latitude: 39.74, longitude: -104.98, altitude: 1610 } }, never);
+  assert.deepEqual(got, { elevationM: 1610, elevationSource: "device" });
+});
+
+test("no device altitude falls back to a lookup, and says so", async () => {
+  const stub = async () => ({ ok: true, json: async () => ({ elevation: [1614] }) });
+  const got = await resolveElevation(
+    { coords: { latitude: 39.74, longitude: -104.98, altitude: null } }, stub);
+  assert.deepEqual(got, { elevationM: 1614, elevationSource: "lookup" });
+});
+
+test("a failed lookup records that the height is UNKNOWN, not zero", async () => {
+  // THE point of elevationSource. Sea level is still what gets used, and that
+  // is correct — but a stored location with no elevation would otherwise be
+  // indistinguishable from one that genuinely sits at sea level. Somebody in
+  // Denver would get a theme seven minutes off with nothing recording why.
+  // That is the same silent-fallback shape as the memory writes that vanished
+  // into a bare `except` and the CORS test that passed while the browser
+  // failed, so it gets a marker and a console warning.
+  const dead = async () => { throw new Error("offline"); };
+  const warnings = [];
+  const realWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(" "));
+  try {
+    const got = await resolveElevation(
+      { coords: { latitude: 39.74, longitude: -104.98, altitude: null } }, dead);
+    assert.deepEqual(got, { elevationM: null, elevationSource: null });
+  } finally {
+    console.warn = realWarn;
+  }
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /sea level/);
+});
+
+test("a nonsense device altitude is ignored rather than trusted", async () => {
+  const stub = async () => ({ ok: true, json: async () => ({ elevation: [1614] }) });
+  for (const altitude of [NaN, -9999, undefined]) {
+    const got = await resolveElevation(
+      { coords: { latitude: 39.74, longitude: -104.98, altitude } }, stub);
+    assert.equal(got.elevationSource, "lookup", `altitude ${String(altitude)}`);
+  }
 });

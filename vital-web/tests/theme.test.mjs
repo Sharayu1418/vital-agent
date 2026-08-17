@@ -222,3 +222,42 @@ test("writeGeo records when the fix was taken, and readGeo returns it", () => {
   assert.equal(back.at, at);
   assert.equal(back.lat, 42.65);          // still rounded for privacy
 });
+
+
+test("an unknown elevation is stored distinguishably from sea level", () => {
+  const store = new Map();
+  const storage = {
+    getItem: (k) => store.get(k) ?? null,
+    setItem: (k, v) => store.set(k, v),
+    removeItem: (k) => store.delete(k),
+  };
+
+  // lookup failed: no height, no source
+  writeGeo(storage, 39.74, -104.98, { source: "device", elevationM: null });
+  const unknown = readGeo(storage);
+  assert.equal("elevationM" in unknown, false);
+  assert.equal("elevationSource" in unknown, false);
+
+  // genuinely at sea level, and we know it
+  writeGeo(storage, 51.51, -0.13,
+           { source: "manual", elevationM: 0, elevationSource: "geocode" });
+  const known = readGeo(storage);
+  assert.equal(known.elevationM, 0);
+  assert.equal(known.elevationSource, "geocode");
+
+  // These two states used to be identical. Now you can tell them apart by
+  // reading localStorage, which is the difference between a known-good theme
+  // and one that is silently seven minutes out.
+  assert.notDeepEqual(unknown, known);
+});
+
+test("a junk elevation source is dropped rather than stored", () => {
+  const store = new Map();
+  const storage = {
+    getItem: (k) => store.get(k) ?? null,
+    setItem: (k, v) => store.set(k, v),
+    removeItem: (k) => store.delete(k),
+  };
+  writeGeo(storage, 1, 2, { elevationM: 100, elevationSource: "vibes" });
+  assert.equal("elevationSource" in readGeo(storage), false);
+});

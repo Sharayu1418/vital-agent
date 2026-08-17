@@ -32,6 +32,10 @@
  *                      lookup for a device fix.
  *   Device clock     — everything keys off Date.now(). A wrong clock is a
  *                      wrong theme and nothing here can detect it.
+ *   Unknown height   — when the elevation lookup fails the theme uses sea
+ *                      level, which is right, but the geo record now carries
+ *                      elevationSource so "we never found out" is legible
+ *                      rather than identical to "it really is sea level".
  *   Refraction       — the -0.833° is an average. Real air varies with
  *                      temperature and pressure by a minute or two.
  *   Tick interval    — the theme re-evaluates every 5 minutes, so a phase

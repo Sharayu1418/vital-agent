@@ -18,7 +18,7 @@ import {
 } from "./lib/auth";
 import { firebaseConfigured } from "./lib/firebase";
 import { createGenerationGuard, createThreadGuard, shouldApplyChunk } from "./lib/guard";
-import { fetchElevation, shouldRequestDeviceLocation } from "./lib/location";
+import { resolveElevation, shouldRequestDeviceLocation } from "./lib/location";
 import { isSynthesisSupported } from "./lib/speech";
 import { applyEvent, initialStream, shouldKeepBubble, sseEvents } from "./lib/stream";
 import { clearGeo, firstNameFrom, readGeo, resolveTheme, writeGeo } from "./lib/theme";
@@ -161,10 +161,12 @@ export default function Home() {
       // which is what the app did before elevation existed.
       apply(writeGeo(localStorage, latitude, longitude,
                      { label: "Current location", source: "device" }));
-      fetchElevation(latitude, longitude).then((elevationM) => {
+      resolveElevation(position).then(({ elevationM, elevationSource }) => {
         if (!live || elevationM === null) return;
-        apply(writeGeo(localStorage, latitude, longitude,
-                       { label: "Current location", source: "device", elevationM }));
+        apply(writeGeo(localStorage, latitude, longitude, {
+          label: "Current location", source: "device",
+          elevationM, elevationSource,
+        }));
       });
     };
     const request = () => navigator.geolocation.getCurrentPosition(

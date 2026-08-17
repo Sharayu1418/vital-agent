@@ -102,6 +102,12 @@ export function daylightTheme(nowMs, lat, lng, elevationM = 0) {
  * fix OR a manually set location — both write the same shape. */
 export const GEO_KEY = "vital_geo";
 
+/* "geocode" — came free with a place name the user typed.
+ * "device"  — the GPS fix reported its own altitude.
+ * "lookup"  — one terrain-height request for a device fix.
+ * absent    — unknown; sea level is assumed and that assumption is a guess. */
+export const ELEVATION_SOURCES = new Set(["geocode", "device", "lookup"]);
+
 export function roundCoord(n) {
   return Math.round(n * 100) / 100;   // 2dp ≈ 1.1km
 }
@@ -117,6 +123,8 @@ export function readGeo(storage) {
           ...(g.source === "manual" || g.source === "device" ? { source: g.source } : {}),
           ...(typeof g.at === "number" ? { at: g.at } : {}),
           ...(typeof g.elevationM === "number" ? { elevationM: g.elevationM } : {}),
+          ...(ELEVATION_SOURCES.has(g.elevationSource)
+            ? { elevationSource: g.elevationSource } : {}),
         } : null;
   } catch {
     return null;
@@ -139,6 +147,12 @@ export function writeGeo(storage, lat, lng, details = {}) {
       // which is what the whole app assumed until now.
       ...(Number.isFinite(details.elevationM)
         ? { elevationM: Math.round(details.elevationM) } : {}),
+      // WHERE the height came from, or absent when we never found one. A
+      // stored location with no elevation is otherwise indistinguishable
+      // from one that genuinely sits at sea level, and the theme would be
+      // quietly wrong at altitude with nothing recording why.
+      ...(ELEVATION_SOURCES.has(details.elevationSource)
+        ? { elevationSource: details.elevationSource } : {}),
     };
     storage.setItem(GEO_KEY, JSON.stringify(geo));
     return geo;

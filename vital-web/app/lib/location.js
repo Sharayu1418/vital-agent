@@ -51,6 +51,40 @@ export async function fetchElevation(lat, lng, fetchImpl = fetch) {
   }
 }
 
+/* Terrain height for a device fix, and WHERE IT CAME FROM.
+ *
+ * The `source` half is the point. Falling back to sea level on failure is
+ * correct behaviour, but it leaves no trace, and a stored location with no
+ * elevation is then indistinguishable from a location that really is at sea
+ * level. Somebody in Denver would see a theme seven minutes off with nothing
+ * anywhere saying why — the same silent-fallback shape as the memory writes
+ * that vanished into a bare `except`, and the CORS test that passed while the
+ * browser failed.
+ *
+ * Order is cheapest-and-most-private first:
+ *   "device"  — the GPS fix already carries altitude. No network, nothing
+ *               leaves the browser. Usually null on desktops, present on
+ *               phones outdoors.
+ *   "lookup"  — one request, cached with the position.
+ *   null      — unknown. Sea level is USED, but recorded as a guess.
+ */
+export async function resolveElevation(position, fetchImpl = fetch) {
+  const fromDevice = position?.coords?.altitude;
+  if (Number.isFinite(fromDevice) && fromDevice > -100) {
+    return { elevationM: fromDevice, elevationSource: "device" };
+  }
+  const looked = await fetchElevation(position.coords.latitude,
+                                      position.coords.longitude, fetchImpl);
+  if (looked === null) {
+    // Deliberately noisy. This is a background colour, so it must not throw
+    // or block — but it must not be invisible either.
+    console.warn("[vital] elevation lookup failed; daylight theme is assuming "
+                 + "sea level, which is up to ~7 min out at altitude");
+    return { elevationM: null, elevationSource: null };
+  }
+  return { elevationM: looked, elevationSource: "lookup" };
+}
+
 export function formatLocationLabel(result) {
   const parts = [result?.name, result?.admin1, result?.country]
     .filter((part) => typeof part === "string" && part.trim());
@@ -89,6 +123,7 @@ export async function geocodeLocation(query, fetchImpl = fetch) {
     // It is the input the sunrise maths was missing: -0.833° assumes a
     // sea-level horizon, which put Denver's sunrise 7 minutes late. Free
     // here — no extra request, no extra coordinate leaving the browser.
-    ...(Number.isFinite(result.elevation) ? { elevationM: result.elevation } : {}),
+    ...(Number.isFinite(result.elevation)
+      ? { elevationM: result.elevation, elevationSource: "geocode" } : {}),
   };
 }
