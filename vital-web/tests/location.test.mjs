@@ -56,3 +56,35 @@ test("geocodeLocation reports invalid, missing, and failed searches", async () =
     throw new Error("offline");
   }), /unavailable/);
 });
+
+
+test("a stale device fix triggers a refresh, but only silently", () => {
+  const now = Date.parse("2026-08-16T12:00:00Z");
+  const stale = { lat: 42.65, lng: -73.76, source: "device", at: now - 30 * 3600e3 };
+  const base = { gate: "app", available: true, nowMs: now };
+
+  // permission already granted: refresh without a prompt
+  assert.equal(shouldRequestDeviceLocation(
+    { ...base, location: stale, permission: "granted" }), true);
+
+  // NOT granted: leave it alone. A permission prompt on every visit trains
+  // people to deny it, and then the theme falls back to the clock forever —
+  // strictly worse than a stale fix.
+  assert.equal(shouldRequestDeviceLocation(
+    { ...base, location: stale, permission: "prompt" }), false);
+  assert.equal(shouldRequestDeviceLocation(
+    { ...base, location: stale, permission: undefined }), false);
+  assert.equal(shouldRequestDeviceLocation(
+    { ...base, location: stale, permission: "denied" }), false);
+});
+
+test("a fresh fix and a manual choice are both left alone", () => {
+  const now = Date.parse("2026-08-16T12:00:00Z");
+  const base = { gate: "app", available: true, permission: "granted", nowMs: now };
+  assert.equal(shouldRequestDeviceLocation({
+    ...base, location: { lat: 1, lng: 2, source: "device", at: now - 60e3 },
+  }), false);
+  assert.equal(shouldRequestDeviceLocation({
+    ...base, location: { lat: 1, lng: 2, source: "manual", at: 0 },
+  }), false);
+});

@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 
 import {
   DAILY_LINES, clearGeo, dailyLine, daylightPhase, daylightTheme, firstNameFrom,
-  readGeo, resolveTheme, roundCoord, sunTimesUTC, themeForHour, themeForPhase,
-  timeGreeting, writeGeo,
+  isLocationStale, readGeo, resolveTheme, roundCoord, sunTimesUTC, themeForHour,
+  themeForPhase, timeGreeting, writeGeo,
 } from "../app/lib/theme.js";
 
 test("mornings are light, the rest of the day is dark", () => {
@@ -116,12 +116,19 @@ test("geo preference round-trips and is coarsened for privacy", () => {
     removeItem: (k) => store.delete(k),
   };
   assert.equal(readGeo(s), null);
+  // `at` is stamped by writeGeo and compared separately — a deepEqual on the
+  // whole object would now be asserting the current time.
   writeGeo(s, 40.7128, -74.0060);
-  assert.deepEqual(readGeo(s), { lat: 40.71, lng: -74.01 });   // rounded to 2dp
+  const plain = readGeo(s);
+  assert.equal(plain.lat, 40.71);                              // rounded to 2dp
+  assert.equal(plain.lng, -74.01);
+  assert.equal(typeof plain.at, "number");
   writeGeo(s, 40.7128, -74.0060, { label: "New York, NY", source: "manual" });
-  assert.deepEqual(readGeo(s), {
+  const { at, ...rest } = readGeo(s);
+  assert.deepEqual(rest, {
     lat: 40.71, lng: -74.01, label: "New York, NY", source: "manual",
   });
+  assert.equal(typeof at, "number");
   assert.equal(roundCoord(1.23456), 1.23);
   clearGeo(s);
   assert.equal(readGeo(s), null);
@@ -165,4 +172,53 @@ test("unusable names come back empty so the greeting stays nameless", () => {
 test("markup characters are stripped, letters survive", () => {
   assert.equal(firstNameFrom("<script>"), "Script");   // no <> ever survive
   assert.equal(firstNameFrom("sam!!"), "Sam");
+});
+
+
+// ---------- stale locations: the biggest error in the daylight theme ----------
+
+test("a device fix goes stale, so the theme cannot follow you to the wrong city", () => {
+  // The bug: shouldRequestDeviceLocation returned false whenever ANY location
+  // was stored, and writeGeo recorded no timestamp. The first fix a browser
+  // ever produced was kept forever. Grant location in Albany, fly to London,
+  // and the app themes to Albany's sun indefinitely — five hours out, against
+  // a solar equation accurate to a quarter of a minute.
+  const now = Date.parse("2026-08-16T12:00:00Z");
+  const fresh = { lat: 42.65, lng: -73.76, source: "device", at: now - 3600e3 };
+  const old = { lat: 42.65, lng: -73.76, source: "device", at: now - 30 * 3600e3 };
+
+  assert.equal(isLocationStale(fresh, now), false);
+  assert.equal(isLocationStale(old, now), true);
+});
+
+test("a location the user typed never goes stale", () => {
+  // Somebody who set "Lisbon" meant it. Silently replacing their choice with
+  // wherever the device happens to be is a worse bug than the one above.
+  const now = Date.parse("2026-08-16T12:00:00Z");
+  const ancient = { lat: 38.72, lng: -9.14, source: "manual",
+                    at: now - 365 * 24 * 3600e3 };
+  assert.equal(isLocationStale(ancient, now), false);
+});
+
+test("a device fix saved before timestamps existed refreshes once", () => {
+  // Rows already in real browsers have no `at`. Treating them as fresh would
+  // mean the fix never reaches anyone who already used the app.
+  const now = Date.now();
+  assert.equal(isLocationStale({ lat: 1, lng: 2, source: "device" }, now), true);
+  assert.equal(isLocationStale({ lat: 1, lng: 2, source: "manual" }, now), false);
+  assert.equal(isLocationStale(null, now), false);
+});
+
+test("writeGeo records when the fix was taken, and readGeo returns it", () => {
+  const store = new Map();
+  const storage = {
+    getItem: (k) => store.get(k) ?? null,
+    setItem: (k, v) => store.set(k, v),
+    removeItem: (k) => store.delete(k),
+  };
+  const at = Date.parse("2026-08-16T12:00:00Z");
+  writeGeo(storage, 42.6547, -73.7562, { source: "device", at });
+  const back = readGeo(storage);
+  assert.equal(back.at, at);
+  assert.equal(back.lat, 42.65);          // still rounded for privacy
 });

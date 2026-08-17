@@ -96,6 +96,7 @@ export function readGeo(storage) {
           lng: g.lng,
           ...(typeof g.label === "string" && g.label ? { label: g.label } : {}),
           ...(g.source === "manual" || g.source === "device" ? { source: g.source } : {}),
+          ...(typeof g.at === "number" ? { at: g.at } : {}),
         } : null;
   } catch {
     return null;
@@ -110,11 +111,37 @@ export function writeGeo(storage, lat, lng, details = {}) {
       ...(details.label ? { label: String(details.label).slice(0, 100) } : {}),
       ...(details.source === "manual" || details.source === "device"
         ? { source: details.source } : {}),
+      // WHEN this fix was taken. Without it there is no way to tell a
+      // position from ten seconds ago from one taken in another country six
+      // months back, and the app kept the first one it ever got.
+      at: typeof details.at === "number" ? details.at : Date.now(),
     };
     storage.setItem(GEO_KEY, JSON.stringify(geo));
     return geo;
   } catch { /* private mode: theme just falls back to the clock */ }
   return null;
+}
+
+/* A device fix goes stale; a place the user typed does not.
+ *
+ * This is the largest error in the whole daylight calculation, and it is not
+ * in the astronomy. The solar equation is accurate to about a quarter of a
+ * minute. A location captured in Albany and still in use after a flight to
+ * London is wrong by five hours — four orders of magnitude worse than the
+ * maths, and it was unbounded because nothing ever asked for a new fix.
+ *
+ * Manual locations are exempt on purpose. Somebody who typed "Lisbon" meant
+ * it, and silently replacing their choice with wherever the device happens to
+ * be would be a worse bug than the one this fixes.
+ *
+ * A device fix with no timestamp predates this field. Treated as stale, so it
+ * refreshes once and gains one. */
+export const GEO_MAX_AGE_MS = 12 * 3600 * 1000;
+
+export function isLocationStale(geo, nowMs, maxAgeMs = GEO_MAX_AGE_MS) {
+  if (!geo || geo.source !== "device") return false;
+  if (typeof geo.at !== "number") return true;
+  return nowMs - geo.at > maxAgeMs;
 }
 
 export function clearGeo(storage) {

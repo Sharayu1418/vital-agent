@@ -1,7 +1,21 @@
+import { isLocationStale } from "./theme.js";
+
 const GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search";
 
-export function shouldRequestDeviceLocation({ gate, location, available, permission }) {
-  return gate === "app" && !location && available && permission !== "denied";
+/* Ask the device for a position when we have none — or when the one we have
+ * is an old device fix.
+ *
+ * The refresh branch requires permission to be ALREADY granted. Re-asking is
+ * the one thing worse than a stale fix: a permission prompt on every visit
+ * trains people to deny it, and then the theme falls back to the clock
+ * forever. A browser with no Permissions API reports undefined, which does
+ * not equal "granted", so those simply keep the old behaviour of asking once.
+ */
+export function shouldRequestDeviceLocation({ gate, location, available, permission,
+                                              nowMs = Date.now() }) {
+  if (gate !== "app" || !available || permission === "denied") return false;
+  if (!location) return true;
+  return permission === "granted" && isLocationStale(location, nowMs);
 }
 
 export function formatLocationLabel(result) {
