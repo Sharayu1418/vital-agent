@@ -4,7 +4,15 @@ __pycache__/
 .venv/
 .pytest_cache/
 .ruff_cache/
-uv.lock
+
+# uv.lock IS committed. It was ignored, which meant CI checked out a repo with
+# no lockfile and `uv sync` resolved fresh from PyPI on every run — so CI never
+# once tested the dependency versions the app actually runs. It surfaced as a
+# lint failure (a newer ruff with a wider default rule set found 254 problems
+# that the locked ruff does not enforce), but the lint was the symptom.
+#
+# Lockfiles are committed for applications and ignored for libraries. This is
+# an application.
 
 # user health data + local databases — NEVER commit (P1)
 data/

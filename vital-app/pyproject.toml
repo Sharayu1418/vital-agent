@@ -41,6 +41,18 @@ packages = ["src/vital"]
 line-length = 100
 src = ["src"]
 
+# The rule set is PINNED here, not inherited from whichever ruff runs.
+#
+# These are the checks ruff 0.15.21 applied by default, written down. Ruff's
+# defaults widen between releases: 0.16 adds BLE001, DTZ, FLY002, ISC004,
+# PLR0402 and more, which turned a clean tree into 254 errors. That is a fine
+# thing for ruff to do and a terrible thing for a blocking CI step to inherit,
+# because the same commit then passes or fails depending on the day it runs.
+#
+# Widen this list deliberately if you want more; do not let it widen itself.
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # test_firebase_auth.py imports `tests.test_api_security`, which needs the

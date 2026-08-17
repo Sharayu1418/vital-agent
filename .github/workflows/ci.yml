@@ -47,15 +47,20 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-          # uv.lock lives in vital-app, not the repo root. Without this the
-          # action logged "No file matched to [**/uv.lock,**/requirements*.txt]
-          # — the cache will never get invalidated" and then happily served a
-          # cache keyed on nothing, so a dependency change would not have
-          # produced a fresh install.
+          # uv.lock lives in vital-app, not the repo root.
+          #
+          # This glob reported "No file matched" even after being pointed at the
+          # right path, because uv.lock was in .gitignore and had never been
+          # committed. The cache warning was the visible edge of a much larger
+          # problem: with no lockfile, `uv sync` resolved fresh from PyPI on
+          # every run, so CI never tested the versions the app actually runs.
           cache-dependency-glob: vital-app/uv.lock
 
+      # --locked, not a bare sync: fail loudly if uv.lock is stale or missing
+      # rather than silently resolving something else. CI resolving its own
+      # dependency versions is CI testing a different application.
       - name: Install dependencies
-        run: uv sync --all-extras
+        run: uv sync --locked --all-extras
 
       # No credentials are provided on purpose. conftest pins
       # GOOGLE_CLOUD_PROJECT to "test" and patches every network seam, so a
@@ -73,11 +78,14 @@ jobs:
       # carries exactly as much information as no check.
       #
       # The backlog turned out to be nine unused imports and one f-string.
-      # Ruff is pinned through uv.lock, which matters more than it sounds:
-      # running a NEWER ruff locally reported 261 problems, because the
-      # default rule set expands between releases. Lint that disagrees with
-      # itself across machines is the advisory-check failure again in a
-      # different costume.
+      #
+      # Then this step failed for a week with 254 errors that no local run
+      # could reproduce. uv.lock was gitignored, so CI resolved fresh from
+      # PyPI and got a ruff whose DEFAULT rule set is wider — BLE001, DTZ,
+      # FLY002 and friends. Two fixes, because either alone leaves a hole:
+      # the lockfile is committed now, and pyproject pins an explicit
+      # `[tool.ruff.lint] select` so the rules cannot widen underneath us
+      # even if the version does.
       - name: Lint
         run: uv run ruff check src tests scripts
 
