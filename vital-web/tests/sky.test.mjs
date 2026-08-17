@@ -172,3 +172,51 @@ test("mobile ships the identical module, not a copy that drifted", () => {
     "vital-mobile/lib/sky.js has drifted from vital-web/app/lib/sky.js — " +
     "run scripts/sync-sky.sh");
 });
+
+
+// ---------- does the colour actually reach the screen ----------
+
+test("the sky variables feed the ones the app paints with", () => {
+  // The gap this closes: skyColor was computed correctly, tested to four
+  // decimal places, and wired to --sky-bg and --sky-text only. The app
+  // paints with --muted (58 uses), --accent (50), --glass (17) and --text
+  // (17). So a fully-tested continuous palette changed the body background
+  // and essentially nothing else.
+  //
+  // Computing a colour and displaying it are different claims, and the tests
+  // only covered the first one. Same shape as the CORS contract test: check
+  // the seam between the two halves, not each half alone.
+  const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
+
+  for (const [consumer, source] of [
+    ["--text", "--sky-text"],
+    ["--muted", "--sky-muted"],
+    ["--accent", "--sky-accent"],
+    ["--surface", "--sky-panel"],
+  ]) {
+    // BOTH palettes, not one. The first version accepted a single match, so
+    // unwiring the dark theme still passed on the strength of the light one
+    // — a mutation check caught it. There are two theme blocks and a colour
+    // that only follows the sun in one of them is a bug that shows up for
+    // half the day.
+    const pattern = new RegExp(`\\${consumer}:\\s*var\\(${source},`, "g");
+    const found = (css.match(pattern) || []).length;
+    assert.ok(found >= 2,
+      `${consumer} reads ${source} in ${found} of the 2 theme blocks — the ` +
+      "sky is computed but not painted with everywhere");
+  }
+});
+
+test("every sky variable has a static fallback", () => {
+  // The theme must survive no location, denied geolocation, private mode,
+  // and the first paint before JS runs. A var() without a fallback renders
+  // as `unset` and the app loses its colours entirely — a much louder
+  // failure than the stale-elevation one, and just as avoidable.
+  const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
+  const uses = css.match(/var\(--sky-(?:text|muted|accent|panel|bg)[^)]*\)/g) || [];
+  assert.ok(uses.length >= 8, "expected the sky variables to be consumed");
+  for (const use of uses) {
+    assert.match(use, /,\s*\S/,
+      `${use} has no fallback — with no location this renders as unset`);
+  }
+});

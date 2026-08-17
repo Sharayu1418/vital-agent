@@ -11,9 +11,15 @@
   --glass: rgba(28, 34, 58, 0.5);
   --glass-strong: rgba(24, 30, 52, 0.8);
   --glass-border: rgba(165, 178, 255, 0.13);
-  --text: #eceef6;
-  --muted: #9aa3ba;
-  --accent: #efa783;
+  /* var(--sky-*, <static>) — the sky wins WHEN IT IS SET, and the hand-picked
+     palette is the fallback for every other case: no location, geolocation
+     denied, private mode, or the first paint before JS runs. Redirecting
+     these three is what makes the continuous colour actually reach the
+     screen: --muted is used 58 times, --accent 50, --text 17. Setting
+     --sky-* alone changed the body background and nothing else. */
+  --text: var(--sky-text, #eceef6);
+  --muted: var(--sky-muted, #9aa3ba);
+  --accent: var(--sky-accent, #efa783);
   --accent-soft: rgba(239, 167, 131, 0.14);
   --accent-2: #8ab6d9;
   --accent-ring: rgba(239, 167, 131, 0.2);
@@ -28,7 +34,7 @@
   --shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
   --radius: 18px;
   /* solid surfaces for dialogs/sheets — translucency reads as broken there */
-  --surface: #1a2038;
+  --surface: var(--sky-panel, #1a2038);
   --field: #232a4c;
   --panel-surface: rgba(18, 24, 47, 0.72);
   --card-surface: rgba(31, 37, 61, 0.9);
@@ -44,9 +50,9 @@
   --glass: rgba(255, 255, 255, 0.42);
   --glass-strong: rgba(255, 255, 255, 0.62);
   --glass-border: rgba(255, 255, 255, 0.55);
-  --text: #2a2733;
-  --muted: #6b6675;
-  --accent: #a94632;
+  --text: var(--sky-text, #2a2733);
+  --muted: var(--sky-muted, #6b6675);
+  --accent: var(--sky-accent, #a94632);
   --accent-soft: rgba(169, 70, 50, 0.12);
   --accent-2: #416d91;
   --accent-ring: rgba(169, 70, 50, 0.18);
@@ -59,7 +65,7 @@
   --user-bubble: rgba(38, 36, 48, 0.85);
   --user-text: #f5f4f8;
   --shadow: 0 12px 40px rgba(80, 50, 30, 0.18);
-  --surface: #fbfaf8;
+  --surface: var(--sky-panel, #fbfaf8);
   --field: #f0eef2;
   --panel-surface: rgba(255, 255, 255, 0.42);
   --card-surface: rgba(255, 255, 255, 0.72);
@@ -108,8 +114,10 @@ body::before {              /* the sun / dawn glow, behind everything */
   --sky-muted: initial;
   --sky-accent: initial;
 }
-html[style*="--sky-bg"] body { background-color: var(--sky-bg); }
-html[style*="--sky-bg"] { color: var(--sky-text); }
+/* The gradient stays — it is what gives the background depth — but it sits
+   over the sky colour, so the overall cast follows the sun even where the
+   gradient is transparent. */
+body { background-color: var(--sky-bg, transparent); }
 /* A slow transition so the ~5-minute tick reads as drift, not a repaint. */
 body, .panel, .card, .composer-inner {
   transition: background-color 2.5s linear, color 2.5s linear;
