@@ -22,9 +22,78 @@ this project reads.
 What's still missing is mostly measurement and one or two loops that would
 make the app improve as you use it.
 
+### Since this list was written
+
+**Item 1 is built.** The labelled set lives in `retrieval_cases.py` and the
+metrics in `test_retrieval_quality.py`, both under `vital-app/tests/`.
+Building it found three separate bugs in memory that had nothing to do with
+retrieval quality — see "What building the measuring stick actually found"
+below. The recall and MRR numbers themselves are still unread, because the
+eval needs live credentials to run.
+
+**Memory had three real bugs, all found by one failing number.** Dedup was
+chaining, failed writes were silent, and `all_memories` was returning ten
+rows. Ranking read that truncated list, so a user's preferences were built
+from the first ten facts VITAL knew about them and no more.
+
+**Buddy connections are durable.** An accepted match used to be a row
+attached to a post; deleting the post deleted the relationship. It is now
+its own record with snapshotted names, and People Connector can read the
+user's own requests instead of only searching strangers.
+
+**The theme follows the real sun.** Sunrise/sunset is verified against an
+ephemeris (median 0.25 min), terrain elevation is accounted for, and colour
+is now continuous in solar altitude rather than four snapping phases. One
+shared module drives both web and mobile.
+
 ---
 
-## 1. Measure how good retrieval actually is
+## What building the measuring stick actually found
+
+Worth reading before item 2, because the pattern repeats and it is the most
+useful interview material in this project.
+
+The retrieval eval reported "10 of 18 facts stored". Three rounds of
+investigation, three different bugs, and the first two were real:
+
+1. **Dedup was single-linkage and chained.** A merge overwrites the row it
+   matched, so the next fact is compared against whatever landed there last.
+   A cluster walks: A absorbs B, C is judged against B, and A and C end up
+   merged having never been compared. A controlled probe collapsed a pair
+   0.697 apart at a 0.87 threshold — which also proves recalibration was
+   never the fix. Rows now carry an immutable anchor.
+
+2. **Failed writes were invisible.** `remember()` caught every exception and
+   logged nothing, while its own docstring claimed the miss "surfaces
+   through tool-health logging". No such call existed. That sentence is
+   where the investigation stopped looking.
+
+3. **`all_memories` was returning one page.** `store.search` defaults to
+   `limit=10` and the function passed no limit. A function named "all"
+   returned the first ten rows, silently. Ten was never the number stored —
+   it was the page size.
+
+The lesson is the ordering. The count was wrong, so I kept explaining the
+count. Each explanation was plausible and two were genuine bugs. What I
+should have asked first is whether the number could be trusted at all — the
+harness's *reader* was the one component never under suspicion.
+
+Related, from the same week:
+
+- A test built its expected date from `date.today()`, which reads the
+  machine's timezone, while the code files under UTC-plus-offset. It passed
+  in CI forever and failed on a Mac in New York after 8pm — the exact
+  timezone and hours it was written to protect.
+- CI reported "backend tests: Succeeded" with a red exit-code-1 annotation
+  on the same job, because lint was `continue-on-error` and had been failing
+  on every run since the file was written.
+- A newer ruff than the lockfile's reported 261 problems where the pinned
+  version reports 9. Lint that disagrees with itself across machines is the
+  advisory-check failure in a different costume.
+
+---
+
+## 1. Measure how good retrieval actually is  — BUILT
 
 **What it is**
 
@@ -70,6 +139,18 @@ thing this eval finds, and finding something is the point.
   embeddings
 
 **Effort:** half a day.
+
+**What actually happened.** Closer to two days, and almost none of it was
+retrieval. The eval refused to report a number until its own seeding was
+sound, which is the only reason three memory bugs surfaced at all — a
+harness that had quietly proceeded would have printed a plausible recall
+score over ten of eighteen facts and nobody would have looked again.
+
+The interview line above guessed the eval would catch the "User " prefix
+flattening similarity. It did get measured: 0.760 with the prefix against
+0.750 without, a difference of 0.010, so the hypothesis was wrong and the
+prefix stays. Worth keeping the guess and the result side by side — it is a
+better story than if it had been right.
 
 ---
 
