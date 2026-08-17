@@ -63,6 +63,44 @@ export function sunTimesUTC(date, lat, lng, elevationM = 0) {
   };
 }
 
+/* How high the sun is RIGHT NOW, in degrees above the true horizon.
+ * Negative below it. This is the physical quantity that actually drives sky
+ * colour, and it is what the theme should be built on.
+ *
+ * sunTimesUTC answers "when does the sun cross the horizon", which forces
+ * everything downstream into buckets — the theme has four phases and snaps
+ * between them. Altitude is continuous, so the sky can be too, and the same
+ * number means the same colour on every platform without a shared palette
+ * file that has to be kept in step by hand.
+ *
+ * Same low-precision solar model as above; the shared terms are recomputed
+ * rather than factored out because splitting them made both functions harder
+ * to check against the reference implementation.
+ */
+export function solarAltitude(nowMs, lat, lng) {
+  const date = new Date(nowMs);
+  const julian = date.valueOf() / _DAY_MS + _J1970;
+  const d = julian - 2451545.0;                        // days since J2000
+  const M = (357.5291 + 0.98560028 * d) % 360;         // mean anomaly
+  const Mr = M * _RAD;
+  const C = 1.9148 * Math.sin(Mr) + 0.02 * Math.sin(2 * Mr)
+    + 0.0003 * Math.sin(3 * Mr);
+  const lambda = ((M + C + 180 + 102.9372) % 360) * _RAD;
+  const sinDelta = Math.sin(lambda) * Math.sin(23.4397 * _RAD);
+  const delta = Math.asin(sinDelta);                   // declination
+  const rightAsc = Math.atan2(
+    Math.sin(lambda) * Math.cos(23.4397 * _RAD), Math.cos(lambda));
+
+  // Sidereal time at the observer, then the sun's hour angle from it.
+  const theta = (280.16 + 360.9856235 * d + lng) * _RAD;
+  const H = theta - rightAsc;
+
+  const phi = lat * _RAD;
+  const sinAlt = Math.sin(phi) * sinDelta
+    + Math.cos(phi) * Math.cos(delta) * Math.cos(H);
+  return Math.asin(Math.max(-1, Math.min(1, sinAlt))) / _RAD;
+}
+
 /* One of "night" | "sunrise" | "day" | "sunset". The golden window
  * (default 60 min) around each event is its own phase so the sky can warm
  * at dawn/dusk. */

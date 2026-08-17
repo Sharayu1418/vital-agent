@@ -21,10 +21,46 @@ import { createGenerationGuard, createThreadGuard, shouldApplyChunk } from "./li
 import { resolveElevation, shouldRequestDeviceLocation } from "./lib/location";
 import { isSynthesisSupported } from "./lib/speech";
 import { applyEvent, initialStream, shouldKeepBubble, sseEvents } from "./lib/stream";
-import { clearGeo, firstNameFrom, readGeo, resolveTheme, writeGeo } from "./lib/theme";
+import { skyColor } from "./lib/sky";
+import {
+  clearGeo, firstNameFrom, readGeo, resolveTheme, solarAltitude, writeGeo,
+} from "./lib/theme";
 import {
   loadThreads, mergeThreads, newThread, renameIfNew, saveThreads, uid,
 } from "./lib/threads";
+
+/* Everything the sky drives, in one place.
+ *
+ * data-theme and data-daylight stay for the CSS that already keys on them.
+ * The custom properties are the new part: skyColor(altitude) returns hex, so
+ * the colour moves continuously with the sun instead of snapping between
+ * four phases — and the mobile app calls the SAME function, which is the only
+ * reason the two platforms can be expected to match.
+ *
+ * No location means no altitude, so the properties are cleared and the static
+ * palette in globals.css takes over. That is the pre-existing behaviour and
+ * it must keep working: the theme cannot depend on geolocation being granted.
+ */
+function paintSky(geo, nowMs = Date.now()) {
+  const root = document.documentElement;
+  const { theme, phase } = resolveTheme(nowMs, geo);
+  root.dataset.theme = theme;
+  root.dataset.daylight = phase;
+
+  if (!geo || typeof geo.lat !== "number") {
+    for (const name of ["bg", "panel", "text", "muted", "accent"]) {
+      root.style.removeProperty(`--sky-${name}`);
+    }
+    return null;
+  }
+  const sky = skyColor(solarAltitude(nowMs, geo.lat, geo.lng));
+  root.style.setProperty("--sky-bg", sky.bg);
+  root.style.setProperty("--sky-panel", sky.panel);
+  root.style.setProperty("--sky-text", sky.text);
+  root.style.setProperty("--sky-muted", sky.muted);
+  root.style.setProperty("--sky-accent", sky.accent);
+  return sky;
+}
 
 export default function Home() {
   const [userName, setUserName] = useState(null); // null = not loaded yet
@@ -70,13 +106,7 @@ export default function Home() {
     // Theme follows real daylight when we know the user's location (sunrise
     // → day → sunset → night), and the local clock otherwise. Never a manual
     // toggle. Re-checked every few minutes so it shifts while the tab is open.
-    const root = document.documentElement;
-    const applyTheme = () => {
-      const savedLocation = readGeo(localStorage);
-      const { theme, phase } = resolveTheme(Date.now(), savedLocation);
-      root.dataset.theme = theme;
-      root.dataset.daylight = phase;   // drives subtle dawn/dusk warmth in CSS
-    };
+    const applyTheme = () => paintSky(readGeo(localStorage));
     setDaylightLocation(readGeo(localStorage));
     applyTheme();
     const themeTimer = setInterval(applyTheme, 5 * 60 * 1000);
@@ -147,9 +177,7 @@ export default function Home() {
     let live = true;
     const apply = (geo) => {
       setDaylightLocation(geo);
-      const { theme, phase } = resolveTheme(Date.now(), geo);
-      document.documentElement.dataset.theme = theme;
-      document.documentElement.dataset.daylight = phase;
+      paintSky(geo);
     };
     const accept = (position) => {
       if (!live) return;

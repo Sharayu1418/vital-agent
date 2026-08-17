@@ -6,6 +6,7 @@
  * plain RN fetch does not. SSE parsing mirrors vital-web.
  */
 import Constants from "expo-constants";
+import { NIGHT_ALTITUDE, skyColor } from "./lib/sky";
 import * as DocumentPicker from "expo-document-picker";
 import * as SecureStore from "expo-secure-store";
 import { fetch as streamFetch } from "expo/fetch";
@@ -331,43 +332,59 @@ export default function App() {
   );
 }
 
+/* The palette comes from the SAME function the web app uses.
+ *
+ * lib/sky.js is a byte-identical copy of vital-web/app/lib/sky.js — Expo and
+ * Next bundle from separate trees and this repo has no workspace tooling, so
+ * scripts/sync-sky.sh copies it and a web test asserts the two files match.
+ * Sharing the function rather than the colours is the point: a copied palette
+ * drifts the first time somebody tweaks one.
+ *
+ * Colours are still fixed at night here, which reproduces exactly what this
+ * app looked like before. Making them follow the real sun needs a latitude,
+ * and this app has no location library yet — `expo install expo-location`,
+ * then pass solarAltitude(Date.now(), lat, lng) to skyColor and this whole
+ * screen moves with the sky. One dependency, no restyling.
+ */
+const SKY = skyColor(NIGHT_ALTITUDE);
+
 const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "#0f1115" },
+  root: { flex: 1, backgroundColor: SKY.bg },
   top: {
     flexDirection: "row", justifyContent: "space-between", alignItems: "center",
     paddingHorizontal: 16, paddingTop: 56, paddingBottom: 12,
     borderBottomWidth: 1, borderBottomColor: "#262b38",
   },
-  logo: { color: "#e8eaf0", fontSize: 20, fontWeight: "700", letterSpacing: 1 },
+  logo: { color: SKY.text, fontSize: 20, fontWeight: "700", letterSpacing: 1 },
   topActions: { flexDirection: "row", gap: 8 },
   btn: {
-    backgroundColor: "#1e2230", borderColor: "#2c3346", borderWidth: 1,
+    backgroundColor: SKY.panel, borderColor: "#2c3346", borderWidth: 1,
     borderRadius: 10, paddingVertical: 7, paddingHorizontal: 12,
   },
-  btnText: { color: "#e8eaf0", fontSize: 13 },
-  btnPrimary: { backgroundColor: "#5eead4", borderColor: "#5eead4" },
+  btnText: { color: SKY.text, fontSize: 13 },
+  btnPrimary: { backgroundColor: SKY.accent, borderColor: SKY.accent },
   btnPrimaryText: { color: "#08221d", fontWeight: "600", fontSize: 13 },
-  hint: { color: "#9aa3b5", fontSize: 13, marginBottom: 12 },
+  hint: { color: SKY.muted, fontSize: 13, marginBottom: 12 },
   starter: {
-    backgroundColor: "#1e2230", borderRadius: 10, padding: 12, marginBottom: 8,
+    backgroundColor: SKY.panel, borderRadius: 10, padding: 12, marginBottom: 8,
     borderWidth: 1, borderColor: "#2c3346",
   },
   msg: { borderRadius: 14, padding: 12, marginBottom: 10, maxWidth: "85%" },
   msgUser: { backgroundColor: "#818cf8", alignSelf: "flex-end" },
-  msgAi: { backgroundColor: "#171a21", alignSelf: "flex-start" },
+  msgAi: { backgroundColor: SKY.panel, alignSelf: "flex-start" },
   msgUserText: { color: "#0d0f1e", fontSize: 15 },
-  msgAiText: { color: "#e8eaf0", fontSize: 15 },
-  status: { color: "#9aa3b5", fontSize: 11, fontStyle: "italic", marginTop: 4 },
+  msgAiText: { color: SKY.text, fontSize: 15 },
+  status: { color: SKY.muted, fontSize: 11, fontStyle: "italic", marginTop: 4 },
   planCard: {
-    backgroundColor: "#171a21", borderColor: "#5eead4", borderWidth: 1,
+    backgroundColor: SKY.panel, borderColor: SKY.accent, borderWidth: 1,
     borderRadius: 14, padding: 14, marginTop: 8,
   },
-  planTitle: { color: "#5eead4", fontSize: 14, fontWeight: "600", marginBottom: 8 },
-  planItem: { color: "#e8eaf0", fontSize: 13, paddingVertical: 3 },
-  tradeoffs: { color: "#9aa3b5", fontSize: 12, fontStyle: "italic", marginTop: 6 },
+  planTitle: { color: SKY.accent, fontSize: 14, fontWeight: "600", marginBottom: 8 },
+  planItem: { color: SKY.text, fontSize: 13, paddingVertical: 3 },
+  tradeoffs: { color: SKY.muted, fontSize: 12, fontStyle: "italic", marginTop: 6 },
   planActions: { flexDirection: "row", gap: 8, marginTop: 10, marginBottom: 8 },
   input: {
-    backgroundColor: "#171a21", color: "#e8eaf0", borderColor: "#2c3346",
+    backgroundColor: SKY.panel, color: SKY.text, borderColor: "#2c3346",
     borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10,
     fontSize: 15,
   },
@@ -377,7 +394,7 @@ const s = StyleSheet.create({
   },
   modalWrap: { flex: 1, justifyContent: "flex-end", backgroundColor: "#000a" },
   modal: {
-    backgroundColor: "#171a21", borderTopLeftRadius: 18, borderTopRightRadius: 18,
+    backgroundColor: SKY.panel, borderTopLeftRadius: 18, borderTopRightRadius: 18,
     padding: 20, paddingBottom: 40,
   },
   memRow: {

@@ -91,6 +91,30 @@ body::before {              /* the sun / dawn glow, behind everything */
 [data-daylight="day"] { --sky-glow: 0.85; }
 [data-daylight="night"] { --sky-glow: 0.6; }
 
+/* Continuous sky, set from JS.
+ *
+ * The four phases above still drive --sky-glow, because a glow strength is
+ * genuinely a coarse thing. The COLOURS come from skyColor(solarAltitude())
+ * as inline custom properties on <html>, so they move with the sun instead
+ * of snapping at a boundary — and the same function produces the same hex in
+ * the mobile app, which is the only way the two stay in step.
+ *
+ * These fall back to the palette below when no location is known, so nothing
+ * depends on the JS having run. */
+:root {
+  --sky-bg: initial;
+  --sky-panel: initial;
+  --sky-text: initial;
+  --sky-muted: initial;
+  --sky-accent: initial;
+}
+html[style*="--sky-bg"] body { background-color: var(--sky-bg); }
+html[style*="--sky-bg"] { color: var(--sky-text); }
+/* A slow transition so the ~5-minute tick reads as drift, not a repaint. */
+body, .panel, .card, .composer-inner {
+  transition: background-color 2.5s linear, color 2.5s linear;
+}
+
 button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
 
 /* glass recipe (with graceful fallback) */
