@@ -6,6 +6,9 @@ import {
   getRecognitionCtor, isSynthesisSupported, joinTranscript,
   recognitionErrorText, stripMarkdownForSpeech,
 } from "../lib/speech";
+import {
+  MAX_MESSAGE_CHARS, charCountNote, growToFit,
+} from "../lib/composer.js";
 import { dailyLine, firstNameFrom, timeGreeting } from "../lib/theme";
 import {
   MicIcon, SpeakerIcon, StopIcon, ThumbDownIcon, ThumbUpIcon,
@@ -59,6 +62,11 @@ function Composer({ input, setInput, onSend, busy, onStop, hero = false }) {
   const [micNote, setMicNote] = useState(null);
 
   useEffect(() => { if (hero) ref.current?.focus(); }, [hero]);
+
+  // Resize on every change to `input`, not in onChange. Dictation writes
+  // straight to state, and sending clears it — both would leave the box the
+  // wrong height if only typing triggered a measure.
+  useEffect(() => { growToFit(ref.current); }, [input]);
   // Feature-detect after mount so SSR markup matches the first client render.
   useEffect(() => { setMicSupported(Boolean(getRecognitionCtor())); }, []);
   useEffect(() => () => recRef.current?.abort(), []);
@@ -108,7 +116,7 @@ function Composer({ input, setInput, onSend, busy, onStop, hero = false }) {
   return (
     <>
       <div className={`composer-inner ${hero ? "hero-pill" : ""}`}>
-        <textarea ref={ref} value={input} rows={1}
+        <textarea ref={ref} value={input} rows={1} maxLength={MAX_MESSAGE_CHARS}
           placeholder={busy ? "thinking…" : listening ? "Listening…" : "What do you need right now?"}
           disabled={busy}
           onChange={(e) => setInput(e.target.value)}
@@ -134,6 +142,9 @@ function Composer({ input, setInput, onSend, busy, onStop, hero = false }) {
             onClick={() => send(input)}>↑</button>
         )}
       </div>
+      {charCountNote(input) && (
+        <p className="char-note" aria-live="polite">{charCountNote(input)}</p>
+      )}
       {micNote && <p className="mic-note rise">{micNote}</p>}
     </>
   );

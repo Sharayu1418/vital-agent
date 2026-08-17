@@ -659,7 +659,12 @@ button.ghost-danger:hover { border-color: var(--danger); }
 }
 .composer textarea, .composer-inner textarea {
   flex: 1; background: none; border: none; resize: none; color: var(--text);
-  font: inherit; padding: 9px 10px; max-height: 160px; outline: none;
+  font: inherit; padding: 9px 10px; outline: none;
+  /* Height is set by growToFit() in lib/composer.js on every keystroke.
+     max-height caps it here too, as a second line of defence for the frame
+     in which a large paste is measured. Must stay in step with
+     MAX_COMPOSER_PX — a test asserts the two numbers match. */
+  max-height: 160px;
 }
 .composer-inner textarea::placeholder { color: var(--muted); }
 .send {
@@ -701,6 +706,12 @@ button.ghost-danger:hover { border-color: var(--danger); }
 .mic-note {
   max-width: 740px; margin: 6px auto 0; text-align: center;
   color: var(--muted); font-size: 12px;
+}
+/* Only rendered within 200 characters of the server's limit — a permanent
+   counter on an empty box is noise. */
+.char-note {
+  max-width: 740px; margin: 4px auto 0; text-align: right; padding-right: 12px;
+  color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums;
 }
 
 /* ---------- side panel ---------- */
