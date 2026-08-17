@@ -149,7 +149,7 @@ test("absurd and missing altitudes give night, not a crash", () => {
  * platform that does not change the other fails immediately rather than
  * being noticed on somebody's phone. */
 export const GOLDEN_SKY = [
-  [90, "#daeefe"], [25, "#e4e9e5"], [10, "#ecdfc2"], [6, "#f4d9bb"], [0,
+  [90, "#daeefe"], [25, "#e7e7ee"], [10, "#fad8cc"], [6, "#f4d9bb"], [0,
   "#e7885d"], [-3, "#ac577e"], [-6, "#573c7f"], [-12, "#0e1d40"], [-18,
   "#041020"],
 ];

@@ -40,17 +40,29 @@
 export const SKY_STOPS = [
   // altitude   bg                      panel                   accent
   [90, [0.94, 0.030, 240], [0.99, 0.015, 240], [0.55, 0.15, 250]],  // overhead
-  // Low-chroma pivot. Hue runs blue 240 -> gold 70, and the SHORT way round
-  // passes through 155, which is green: at full chroma the midday sky came
-  // out #d2eee7, a distinctly minty blue-green. Real sky pales towards white
-  // before it warms, it does not go green. Dropping chroma to near zero here
-  // means the hue rotation happens while there is almost no colour to see.
-  [25, [0.93, 0.008, 150], [0.98, 0.006, 150], [0.53, 0.15, 150]],
+  // The pivot that keeps the day off the green side of the wheel.
+  //
+  // Hue runs blue 240 -> gold 70. The SHORT way round is anticlockwise
+  // through 155, which is green, and the whole afternoon came out minty:
+  // backgrounds like #deedea, and accent dots that were unmistakably green
+  // on screen. Dropping chroma alone was not enough — it fixed the
+  // backgrounds and left the accent, which carries real chroma by design,
+  // still rotating through green.
+  //
+  // Sitting the pivot at 290 sends the rotation the OTHER way: blue ->
+  // lilac -> pink -> red -> gold. That is both a believable sky and the
+  // path an accent should take into sunset. Low chroma on bg/panel keeps
+  // midday looking hazy rather than purple.
+  [25, [0.93, 0.010, 290], [0.98, 0.008, 290], [0.54, 0.13, 285]],
   [6, [0.90, 0.050, 70], [0.97, 0.030, 70], [0.52, 0.16, 40]],   // golden hour
   [0, [0.72, 0.130, 45], [0.88, 0.080, 50], [0.45, 0.18, 25]],   // horizon
   [-6, [0.42, 0.110, 300], [0.55, 0.080, 295], [0.72, 0.14, 330]],  // civil/blue
-  [-12, [0.24, 0.070, 265], [0.33, 0.050, 265], [0.75, 0.13, 200]],  // nautical
-  [-18, [0.17, 0.040, 255], [0.25, 0.030, 255], [0.78, 0.12, 190]],  // night
+  // Night keeps a WARM accent — the dark theme's has always been peach
+  // (#efa783), and swapping it for teal changed the app's identity for the
+  // half of the day it is dark. Running 330 -> 35 also carries the accent
+  // forward through pink and red rather than back through cyan.
+  [-12, [0.24, 0.070, 265], [0.33, 0.050, 265], [0.74, 0.12, 355]],  // nautical
+  [-18, [0.17, 0.040, 255], [0.25, 0.030, 255], [0.76, 0.13, 30]],   // night
 ];
 
 /* Below this the sky stops changing — the sun is far enough down that no
