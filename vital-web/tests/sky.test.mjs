@@ -220,3 +220,21 @@ test("every sky variable has a static fallback", () => {
       `${use} has no fallback — with no location this renders as unset`);
   }
 });
+
+
+test("the palette preview is not reachable in production", () => {
+  // It is a tool for judging colours, not part of VITAL. Shipped as a public
+  // route it is a page a recruiter can land on that has nothing to do with
+  // the product — and it was one, briefly.
+  //
+  // Checked as source rather than by rendering, because the whole point is
+  // that the route is absent from the production build: there is nothing
+  // left to render there.
+  const page = readFileSync(
+    new URL("../app/sky-preview/page.jsx", import.meta.url), "utf8");
+  assert.match(page, /process\.env\.NODE_ENV === "production"/);
+  assert.match(page, /notFound\(\)/);
+  assert.doesNotMatch(page, /^"use client"/,
+    "a client component would move the gate into the browser bundle, which " +
+    "hides the page instead of removing it");
+});

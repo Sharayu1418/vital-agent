@@ -1,5 +1,14 @@
-"use client";
 /* The whole day on one page — http://localhost:3000/sky-preview
+ *
+ * DEVELOPMENT ONLY. This is a tool for judging the palette, not a product
+ * surface, and it 404s in a production build. It was briefly a public route
+ * on a deployed app, which is a page a recruiter could land on and a page
+ * that has nothing to do with VITAL.
+ *
+ * A server component on purpose: skyColor is pure and there are no hooks, so
+ * nothing here needs to run in the browser — and the notFound() below is then
+ * evaluated at build time, which means the route is genuinely absent from the
+ * production bundle rather than hidden by a runtime check.
  *
  * A route rather than a standalone HTML file. The first version was
  * scripts/sky-preview.html opened with file://, where the browser refuses an
@@ -17,6 +26,8 @@
  *   - an accent that disappears into its own background
  *   - visible steps instead of a gradient
  */
+import { notFound } from "next/navigation";
+
 import { contrastRatio, skyColor } from "../lib/sky";
 
 // Dense near the horizon, where all the interesting colour happens.
@@ -25,6 +36,8 @@ for (let a = 80; a > 12; a -= 4) ALTITUDES.push(a);
 for (let a = 12; a >= -20; a -= 0.5) ALTITUDES.push(Number(a.toFixed(1)));
 
 export default function SkyPreview() {
+  if (process.env.NODE_ENV === "production") notFound();
+
   return (
     <main style={{ font: "13px/1.4 -apple-system, Segoe UI, Roboto, sans-serif" }}>
       <div style={{ padding: "14px 16px", background: "#fff", color: "#111" }}>
