@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  formatLocationLabel, geocodeLocation, shouldRequestDeviceLocation,
+  fetchElevation, formatLocationLabel, geocodeLocation, shouldRequestDeviceLocation,
 } from "../app/lib/location.js";
 
 test("device location is requested only in the signed-in app", () => {
@@ -87,4 +87,58 @@ test("a fresh fix and a manual choice are both left alone", () => {
   assert.equal(shouldRequestDeviceLocation({
     ...base, location: { lat: 1, lng: 2, source: "manual", at: 0 },
   }), false);
+});
+
+
+test("elevation comes free with a geocoded location", () => {
+  // Open-Meteo already returns terrain height; the app was discarding it.
+  const stub = async () => ({
+    ok: true,
+    json: async () => ({ results: [{ latitude: 39.74, longitude: -104.98,
+                                     elevation: 1609, name: "Denver",
+                                     admin1: "Colorado", country: "United States" }] }),
+  });
+  return geocodeLocation("Denver", stub).then((result) => {
+    assert.equal(result.elevationM, 1609);
+    assert.equal(result.source, "manual");
+  });
+});
+
+test("a geocode result without elevation is still usable", async () => {
+  const stub = async () => ({
+    ok: true,
+    json: async () => ({ results: [{ latitude: 1, longitude: 2, name: "Nowhere" }] }),
+  });
+  const result = await geocodeLocation("Nowhere", stub);
+  assert.equal("elevationM" in result, false);   // absent, not null or NaN
+  assert.equal(result.lat, 1);
+});
+
+test("fetchElevation parses the documented shape", async () => {
+  const stub = async () => ({ ok: true, json: async () => ({ elevation: [1614] }) });
+  assert.equal(await fetchElevation(39.74, -104.98, stub), 1614);
+});
+
+test("fetchElevation returns null rather than breaking the theme", async () => {
+  // Every failure mode degrades to sea level, which is what the app did
+  // before elevation existed. A background colour must never depend on a
+  // third party being up.
+  const cases = [
+    async () => { throw new Error("offline"); },
+    async () => ({ ok: false, json: async () => ({}) }),
+    async () => ({ ok: true, json: async () => ({}) }),
+    async () => ({ ok: true, json: async () => ({ elevation: [] }) }),
+    async () => ({ ok: true, json: async () => ({ elevation: "high" }) }),
+    async () => ({ ok: true, json: async () => { throw new Error("not json"); } }),
+  ];
+  for (const stub of cases) {
+    assert.equal(await fetchElevation(1, 2, stub), null);
+  }
+});
+
+test("fetchElevation accepts a bare number too", async () => {
+  // Defensive: one reading of the docs says {"elevation":[n]}. If that ever
+  // becomes {"elevation":n} the theme should lose nothing.
+  const stub = async () => ({ ok: true, json: async () => ({ elevation: 1614 }) });
+  assert.equal(await fetchElevation(39.74, -104.98, stub), 1614);
 });

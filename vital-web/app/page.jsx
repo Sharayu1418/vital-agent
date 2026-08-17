@@ -18,7 +18,7 @@ import {
 } from "./lib/auth";
 import { firebaseConfigured } from "./lib/firebase";
 import { createGenerationGuard, createThreadGuard, shouldApplyChunk } from "./lib/guard";
-import { shouldRequestDeviceLocation } from "./lib/location";
+import { fetchElevation, shouldRequestDeviceLocation } from "./lib/location";
 import { isSynthesisSupported } from "./lib/speech";
 import { applyEvent, initialStream, shouldKeepBubble, sseEvents } from "./lib/stream";
 import { clearGeo, firstNameFrom, readGeo, resolveTheme, writeGeo } from "./lib/theme";
@@ -145,15 +145,27 @@ export default function Home() {
     if (!shouldRequestDeviceLocation({ gate, location: existing, available })) return undefined;
 
     let live = true;
-    const accept = (position) => {
-      if (!live) return;
-      const saved = writeGeo(localStorage, position.coords.latitude, position.coords.longitude, {
-        label: "Current location", source: "device",
-      });
-      setDaylightLocation(saved);
-      const { theme, phase } = resolveTheme(Date.now(), saved);
+    const apply = (geo) => {
+      setDaylightLocation(geo);
+      const { theme, phase } = resolveTheme(Date.now(), geo);
       document.documentElement.dataset.theme = theme;
       document.documentElement.dataset.daylight = phase;
+    };
+    const accept = (position) => {
+      if (!live) return;
+      const { latitude, longitude } = position.coords;
+      // Paint immediately at sea level, then refine once terrain height is
+      // known. A manual location gets elevation free from geocoding; a device
+      // fix needs a lookup, and the theme must not wait on a network call to
+      // render. Worst case the lookup fails and we keep the sea-level answer,
+      // which is what the app did before elevation existed.
+      apply(writeGeo(localStorage, latitude, longitude,
+                     { label: "Current location", source: "device" }));
+      fetchElevation(latitude, longitude).then((elevationM) => {
+        if (!live || elevationM === null) return;
+        apply(writeGeo(localStorage, latitude, longitude,
+                       { label: "Current location", source: "device", elevationM }));
+      });
     };
     const request = () => navigator.geolocation.getCurrentPosition(
       accept, () => {}, { timeout: 8000, maximumAge: 6 * 3600 * 1000 },

@@ -24,8 +24,12 @@
  *   Horizon terrain  — a hill or a tall building to the west can hide the
  *                      sunset by tens of minutes. Unmodelled, and not
  *                      fixable without elevation data for the whole sky.
- *   Altitude         — -0.833° assumes a sea-level horizon. Denver at 1600m
- *                      sees sunrise about 7 minutes earlier than this says.
+ *   Altitude         — FIXED. -0.833° assumed a sea-level horizon, which put
+ *                      Denver's sunrise 7.9 min late. sunTimesUTC now takes
+ *                      terrain height and lowers the horizon by the dip;
+ *                      Denver is 0.8 min, Albany 1.2 -> 0.2. Elevation comes
+ *                      free with a geocoded location and from one cached
+ *                      lookup for a device fix.
  *   Device clock     — everything keys off Date.now(). A wrong clock is a
  *                      wrong theme and nothing here can detect it.
  *   Refraction       — the -0.833° is an average. Real air varies with
@@ -41,7 +45,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { roundCoord, sunTimesUTC } from "../app/lib/theme.js";
+import { horizonDipDeg, roundCoord, sunTimesUTC } from "../app/lib/theme.js";
 
 /** pyephem, sea level, horizon -0:34, pressure 0. */
 const GOLDEN = [
@@ -109,4 +113,55 @@ test("the poles report no sunrise rather than a wrong one", () => {
   assert.equal(sunTimesUTC(midsummer, 85, 0).polar, "day");
   assert.equal(sunTimesUTC(midwinter, 85, 0).polar, "night");
   assert.equal(sunTimesUTC(midsummer, 85, 0).sunriseMs, null);
+});
+
+
+// ---------- elevation: the largest thing the model was missing ----------
+
+test("terrain height moves sunrise, and by roughly the right amount", () => {
+  // Golden values from pyephem with the horizon lowered by the dip
+  // (-34' - 1.93*sqrt(h) arcmin), 2026-08-16.
+  const CASES = [
+    ["Albany NY", 42.65, -73.76, 54, "2026-08-16T10:01:28Z"],
+    ["Denver CO", 39.74, -104.98, 1614, "2026-08-16T12:05:04Z"],
+  ];
+  for (const [place, lat, lng, elevationM, truth] of CASES) {
+    const noon = Date.parse("2026-08-16T12:00:00Z");
+    const solarDate = new Date(noon + (lng / 360) * 86400000);
+    const sea = sunTimesUTC(solarDate, lat, lng);
+    const withElev = sunTimesUTC(solarDate, lat, lng, elevationM);
+    const want = Date.parse(truth);
+
+    const before = minutesApart(sea.sunriseMs, want);
+    const after = minutesApart(withElev.sunriseMs, want);
+    assert.ok(after < before,
+      `${place}: elevation made it worse (${before.toFixed(2)} -> ${after.toFixed(2)})`);
+    assert.ok(after < 1, `${place}: ${after.toFixed(2)} min from the ephemeris`);
+  }
+});
+
+test("Denver is the case that justifies this at all", () => {
+  // 1614 m. Sea level said 12:13:01, the truth is 12:05:04 — nearly eight
+  // minutes, against an algorithm accurate to a quarter of a minute
+  // everywhere flat. It was the biggest MODELLED error in the feature, and
+  // it was invisible because everyone testing lived near sea level.
+  const noon = Date.parse("2026-08-16T12:00:00Z");
+  const solarDate = new Date(noon + (-104.98 / 360) * 86400000);
+  const shift = minutesApart(
+    sunTimesUTC(solarDate, 39.74, -104.98).sunriseMs,
+    sunTimesUTC(solarDate, 39.74, -104.98, 1614).sunriseMs);
+  assert.ok(shift > 6 && shift < 9, `expected ~7 min, got ${shift.toFixed(2)}`);
+});
+
+test("an unknown or silly elevation behaves exactly as sea level did", () => {
+  // Elevation is optional everywhere. A location saved before this existed,
+  // or a failed lookup, must not change the answer or throw.
+  const date = new Date("2026-08-16T12:00:00Z");
+  const base = sunTimesUTC(date, 42.65, -73.76).sunriseMs;
+  for (const bad of [undefined, null, 0, -50, NaN, "high"]) {
+    assert.equal(sunTimesUTC(date, 42.65, -73.76, bad).sunriseMs, base,
+      `elevation ${String(bad)} should be treated as sea level`);
+  }
+  assert.equal(horizonDipDeg(0), 0);
+  assert.ok(horizonDipDeg(1614) > horizonDipDeg(54));
 });

@@ -18,7 +18,23 @@ const _J1970 = 2440587.5;   // Julian date of the Unix epoch
 
 /* { sunriseMs, sunsetMs, polar } in epoch ms (UTC). polar is "day" (sun
  * never sets) or "night" (never rises) at extreme latitudes, else null. */
-export function sunTimesUTC(date, lat, lng) {
+/* How far the horizon drops below level when you stand above the surface.
+ *
+ * ~1.93·√h arcminutes for h in metres. This is the single largest modelled
+ * error in the daylight theme and it was simply absent: the -0.833° below
+ * assumes a sea-level horizon, so Denver at 1614 m had sunrise 7.1 minutes
+ * late. Measured against pyephem, ours was 7.9 minutes out there while being
+ * 1.2 minutes out in Albany — the astronomy was fine, the horizon was wrong.
+ *
+ * Negative or absent elevation returns 0, so an unknown height behaves
+ * exactly as the code did before. */
+export function horizonDipDeg(elevationM) {
+  const h = Number(elevationM);
+  if (!Number.isFinite(h) || h <= 0) return 0;
+  return (1.93 * Math.sqrt(h)) / 60;
+}
+
+export function sunTimesUTC(date, lat, lng, elevationM = 0) {
   const julian = date.valueOf() / _DAY_MS + _J1970;
   const n = Math.round(julian - 2451545.0 + 0.0008);   // days since J2000
   const jStar = n - lng / 360;                          // mean solar time
@@ -31,8 +47,10 @@ export function sunTimesUTC(date, lat, lng) {
   const sinDelta = Math.sin(lambda) * Math.sin(23.4397 * _RAD);   // declination
   const cosDelta = Math.cos(Math.asin(sinDelta));
   const phi = lat * _RAD;
-  // hour angle for the sun's centre at -0.833° (refraction + solar radius)
-  const cosOmega = (Math.sin(-0.833 * _RAD) - Math.sin(phi) * sinDelta)
+  // hour angle for the sun's centre at -0.833° (refraction + solar radius),
+  // lowered further by the horizon dip when we know how high up they are
+  const horizon = -0.833 - horizonDipDeg(elevationM);
+  const cosOmega = (Math.sin(horizon * _RAD) - Math.sin(phi) * sinDelta)
     / (Math.cos(phi) * cosDelta);
   if (cosOmega >= 1) return { sunriseMs: null, sunsetMs: null, polar: "night" };
   if (cosOmega <= -1) return { sunriseMs: null, sunsetMs: null, polar: "day" };
@@ -65,13 +83,14 @@ export function themeForPhase(phase) {
 /* { theme, phase } for a place and instant. Polar day/night collapse to
  * day/night. Callers apply theme to data-theme and phase to data-daylight
  * (which drives subtle warmth/dimness in CSS). */
-export function daylightTheme(nowMs, lat, lng) {
+export function daylightTheme(nowMs, lat, lng, elevationM = 0) {
   // Use the place's approximate solar date. The UTC date can already be
   // tomorrow in the Americas while today's sunset is still in progress (or
   // still be yesterday east of the date line), which selects the wrong pair
   // of sun events around UTC midnight.
   const solarDate = new Date(nowMs + (lng / 360) * _DAY_MS);
-  const { sunriseMs, sunsetMs, polar } = sunTimesUTC(solarDate, lat, lng);
+  const { sunriseMs, sunsetMs, polar } = sunTimesUTC(solarDate, lat, lng,
+                                                    elevationM);
   if (polar) return { theme: themeForPhase(polar), phase: polar };
   const phase = daylightPhase(nowMs, sunriseMs, sunsetMs);
   return { theme: themeForPhase(phase), phase };
@@ -97,6 +116,7 @@ export function readGeo(storage) {
           ...(typeof g.label === "string" && g.label ? { label: g.label } : {}),
           ...(g.source === "manual" || g.source === "device" ? { source: g.source } : {}),
           ...(typeof g.at === "number" ? { at: g.at } : {}),
+          ...(typeof g.elevationM === "number" ? { elevationM: g.elevationM } : {}),
         } : null;
   } catch {
     return null;
@@ -115,6 +135,10 @@ export function writeGeo(storage, lat, lng, details = {}) {
       // position from ten seconds ago from one taken in another country six
       // months back, and the app kept the first one it ever got.
       at: typeof details.at === "number" ? details.at : Date.now(),
+      // Terrain height in metres. Absent is fine and means "sea level",
+      // which is what the whole app assumed until now.
+      ...(Number.isFinite(details.elevationM)
+        ? { elevationM: Math.round(details.elevationM) } : {}),
     };
     storage.setItem(GEO_KEY, JSON.stringify(geo));
     return geo;
@@ -154,7 +178,7 @@ export function clearGeo(storage) {
  * location is known, else the local-hour fallback. Pure and testable. */
 export function resolveTheme(nowMs, geo) {
   if (geo && typeof geo.lat === "number" && typeof geo.lng === "number") {
-    return daylightTheme(nowMs, geo.lat, geo.lng);
+    return daylightTheme(nowMs, geo.lat, geo.lng, geo.elevationM);
   }
   const theme = themeForHour(new Date(nowMs).getHours());
   return { theme, phase: theme === "light" ? "day" : "night" };
