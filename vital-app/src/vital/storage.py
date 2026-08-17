@@ -188,6 +188,34 @@ CREATE TABLE IF NOT EXISTS activity_requests (
     status TEXT NOT NULL DEFAULT 'pending',
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
+-- An accepted match, kept independently of the post that produced it.
+--
+-- Until this existed, "we agreed to swim together" was a row in
+-- activity_requests pointing at a post. Deactivate or edit that post and
+-- the connection went with it: the activity, the other person's name, the
+-- fact it ever happened. A durable relationship cannot be stored as a
+-- foreign key into an advert, because the advert is the temporary half.
+--
+-- So the columns below are SNAPSHOTS taken at the moment of acceptance,
+-- not joins. origin_post_id is provenance for debugging, never a
+-- dependency — nothing reads through it to render a connection.
+--
+-- The pair is stored in a canonical order (user_a < user_b) so that one
+-- relationship is one row no matter who posted and who asked, which is
+-- what makes "have these two already connected" a primary key lookup
+-- rather than a two-way search.
+CREATE TABLE IF NOT EXISTS connections (
+    id __ID__,
+    user_a TEXT NOT NULL, user_b TEXT NOT NULL,
+    name_a TEXT, name_b TEXT,
+    activity TEXT NOT NULL, city TEXT,
+    origin_post_id INTEGER,
+    status TEXT NOT NULL DEFAULT 'active',
+    ended_by TEXT,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS connections_pair
+    ON connections (user_a, user_b, activity);
 CREATE TABLE IF NOT EXISTS user_blocks (
     user_id TEXT NOT NULL, blocked_key TEXT NOT NULL,
     created_at TEXT NOT NULL, PRIMARY KEY (user_id, blocked_key)

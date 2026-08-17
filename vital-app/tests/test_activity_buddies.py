@@ -15,7 +15,7 @@ os.environ.setdefault("SESSION_COOKIE_SECURE", "false")
 
 import pytest
 
-from vital import buddies
+from vital import buddies, storage
 
 
 def _post(user_id="owner", **over) -> dict:
@@ -401,3 +401,174 @@ def test_tool_degrades_gracefully_on_storage_failure(monkeypatch):
     out = people_connector.find_activity_buddies.invoke({"activity": "swimming"})
     assert "error" in out and "unavailable" in out["error"]
     assert "matches" not in out
+
+
+# ---------- connections: the record that outlives the post ----------
+
+def test_accepting_creates_a_connection():
+    post = _post(user_id="owner", activity="swimming")
+    req = buddies.create_request("joiner", post["id"], "keen!",
+                                 requester_name="Sharayu")
+    buddies.decide_request("owner", req["id"], "accepted")
+
+    for who, expect in (("owner", "Sharayu"), ("joiner", "Swim Sam")):
+        found = buddies.my_connections(who)
+        assert len(found) == 1, f"{who} has no connection"
+        assert found[0]["name"] == expect      # each side sees the OTHER
+        assert found[0]["activity"] == "swimming"
+        assert found[0]["status"] == "active"
+
+
+def test_rejecting_does_not_create_a_connection():
+    post = _post(user_id="owner")
+    req = buddies.create_request("joiner", post["id"], "hi")
+    buddies.decide_request("owner", req["id"], "rejected")
+    assert buddies.my_connections("owner") == []
+    assert buddies.my_connections("joiner") == []
+
+
+def test_a_connection_survives_the_post_being_deleted():
+    """THE reason this table exists.
+
+    An accepted match used to be a row in activity_requests pointing at a
+    post. Deactivate or delete that post and the connection went with it —
+    the activity, the other person's name, the fact it ever happened. You
+    could agree to swim with somebody on Monday and by Friday have no record
+    that either of you existed to the other.
+
+    The columns are snapshots, not joins, so this passes with the post row
+    physically gone. If someone later "optimises" them into a JOIN back onto
+    activity_posts, this is the test that stops it.
+    """
+    post = _post(user_id="owner", activity="swimming")
+    req = buddies.create_request("joiner", post["id"], "keen!",
+                                 requester_name="Sharayu")
+    buddies.decide_request("owner", req["id"], "accepted")
+
+    with storage._conn() as c:                       # the harshest case
+        c.execute("DELETE FROM activity_posts WHERE id = ?", (post["id"],))
+        c.execute("DELETE FROM activity_requests WHERE id = ?", (req["id"],))
+
+    still_there = buddies.my_connections("joiner")
+    assert len(still_there) == 1
+    assert still_there[0]["name"] == "Swim Sam"
+    assert still_there[0]["activity"] == "swimming"
+
+
+def test_one_pair_is_one_connection_whichever_way_round_it_started():
+    """Canonical ordering. Without it the same two people produce two rows
+    depending on who posted and who asked, and every 'are we already
+    connected' check has to be written twice."""
+    first = _post(user_id="alice", activity="swimming")
+    req = buddies.create_request("bob", first["id"], "hi")
+    buddies.decide_request("alice", req["id"], "accepted")
+
+    # now the other way round, same activity
+    second = _post(user_id="bob", activity="swimming")
+    req2 = buddies.create_request("alice", second["id"], "hi back")
+    buddies.decide_request("bob", req2["id"], "accepted")
+
+    assert len(buddies.my_connections("alice")) == 1
+    assert len(buddies.my_connections("bob")) == 1
+
+
+def test_the_same_pair_can_connect_over_a_different_activity():
+    """Distinct relationships, not a duplicate. Swimming with someone says
+    nothing about climbing with them."""
+    swim = _post(user_id="alice", activity="swimming")
+    buddies.decide_request(
+        "alice", buddies.create_request("bob", swim["id"], "hi")["id"], "accepted")
+    climb = _post(user_id="alice", activity="climbing")
+    buddies.decide_request(
+        "alice", buddies.create_request("bob", climb["id"], "hi")["id"], "accepted")
+
+    activities = sorted(c["activity"] for c in buddies.my_connections("alice"))
+    assert activities == ["climbing", "swimming"]
+
+
+def test_either_side_can_end_a_connection_and_a_stranger_cannot():
+    post = _post(user_id="owner", activity="swimming")
+    req = buddies.create_request("joiner", post["id"], "hi")
+    buddies.decide_request("owner", req["id"], "accepted")
+    connection = buddies.my_connections("joiner")[0]
+
+    with pytest.raises(LookupError):                 # not part of this pair
+        buddies.end_connection("bystander", connection["id"])
+
+    buddies.end_connection("joiner", connection["id"])   # the REQUESTER ends it
+    assert buddies.my_connections("joiner") == []
+    assert buddies.my_connections("owner") == []         # gone for both sides
+    assert len(buddies.my_connections("owner", include_ended=True)) == 1
+
+
+def test_reconnecting_revives_the_relationship_rather_than_duplicating_it():
+    """Two people who stopped and later started again are the same
+    relationship. A second row would make the history unreadable and let
+    somebody accumulate connections by cycling one."""
+    post = _post(user_id="owner", activity="swimming")
+    req = buddies.create_request("joiner", post["id"], "hi")
+    buddies.decide_request("owner", req["id"], "accepted")
+    buddies.end_connection("joiner", buddies.my_connections("joiner")[0]["id"])
+
+    again = _post(user_id="owner", activity="swimming")
+    req2 = buddies.create_request("joiner", again["id"], "back again")
+    buddies.decide_request("owner", req2["id"], "accepted")
+
+    revived = buddies.my_connections("joiner")
+    assert len(revived) == 1 and revived[0]["status"] == "active"
+    assert len(buddies.my_connections("joiner", include_ended=True)) == 1
+
+
+def test_a_connection_never_exposes_a_raw_user_id():
+    post = _post(user_id="owner-session-token", activity="swimming")
+    req = buddies.create_request("joiner-session-token", post["id"], "hi")
+    buddies.decide_request("owner-session-token", req["id"], "accepted")
+
+    shown = buddies.my_connections("owner-session-token")[0]
+    assert "joiner-session-token" not in repr(shown)
+    assert shown["member_key"] == buddies.public_user_key("joiner-session-token")
+
+
+def test_blocking_removes_a_connection_from_both_directions():
+    """Blocking has to clear every surface. A block that hides somebody from
+    search but leaves them in your connections list is a setting, not a
+    protection."""
+    post = _post(user_id="owner", activity="swimming")
+    req = buddies.create_request("joiner", post["id"], "hi")
+    buddies.decide_request("owner", req["id"], "accepted")
+
+    buddies.block_user("owner", buddies.public_user_key("joiner"))
+    assert buddies.my_connections("owner") == []      # blocker cannot see them
+    assert buddies.my_connections("joiner") == []     # nor they the blocker
+
+
+def test_accepting_over_the_api_gives_both_sides_a_connection():
+    """End to end through the routes the panel actually calls."""
+    owner, joiner = _client(), _client()
+    post = owner.post("/activity-posts", json=BODY).json()["post"]
+    joiner.post(f"/activity-posts/{post['id']}/request",
+                json={"message": "keen!", "requester_name": "Sharayu"})
+
+    request_id = owner.get("/activity-requests/mine").json()["incoming"][0]["id"]
+    owner.patch(f"/activity-requests/{request_id}", json={"status": "accepted"})
+
+    for client, expect in ((owner, "Sharayu"), (joiner, "Swim Sam")):
+        found = client.get("/buddy-connections").json()["connections"]
+        assert [c["name"] for c in found] == [expect]
+        assert found[0]["activity"] == "swimming"
+
+
+def test_a_stranger_cannot_end_someone_elses_connection():
+    owner, joiner, stranger = _client(), _client(), _client()
+    post = owner.post("/activity-posts", json=BODY).json()["post"]
+    joiner.post(f"/activity-posts/{post['id']}/request", json={"message": "hi"})
+    request_id = owner.get("/activity-requests/mine").json()["incoming"][0]["id"]
+    owner.patch(f"/activity-requests/{request_id}", json={"status": "accepted"})
+    connection_id = owner.get("/buddy-connections").json()["connections"][0]["id"]
+
+    stranger.get("/activity-posts")                      # establish a session
+    assert stranger.delete(f"/buddy-connections/{connection_id}").status_code == 404
+    assert owner.get("/buddy-connections").json()["connections"] != []
+
+    assert joiner.delete(f"/buddy-connections/{connection_id}").status_code == 200
+    assert owner.get("/buddy-connections").json()["connections"] == []

@@ -61,14 +61,25 @@ def my_activity_buddies() -> dict:
     "who accepted my swimming request" or "am I still waiting on anyone",
     because those are facts about this user, not an advert on the board.
 
-    Returns {'outgoing': [...], 'incoming': [...]}, each entry carrying the
-    activity, a display name, a status of pending/accepted/rejected, and the
-    date. Accepting or declining is NOT available to you — that is a click
-    the user makes in the Activity Buddies panel, because it shares their
+    Returns three lists.
+
+    'connections' — people they have ACTUALLY agreed to do something with.
+    This is the durable one: it survives the post being closed or deleted,
+    so it is where to look for "the person I swim with" months later. Each
+    entry has a name, the activity, and when it started.
+
+    'outgoing' / 'incoming' — individual requests and their state, carrying
+    the activity, a display name, a status of pending/accepted/rejected, and
+    the date. Use these for "am I still waiting to hear back".
+
+    Accepting or declining is NOT available to you — that is a click the
+    user makes in the Activity Buddies panel, because it shares their
     approximate location with another person.
     """
     try:
-        return {**buddies.my_requests(storage.current_user_id.get()),
+        user_id = storage.current_user_id.get()
+        return {"connections": buddies.my_connections(user_id),
+                **buddies.my_requests(user_id),
                 "safety_note": buddies.SAFETY_NOTE}
     except Exception as exc:  # storage failure must degrade, not crash the turn
         return {"error": f"buddy history unavailable ({type(exc).__name__})"}
@@ -81,7 +92,8 @@ FIRST, decide which question you are being asked.
 
 If it is about someone the user ALREADY has a connection with — a name, "who
 accepted", "did anyone reply", "the person I matched with", "am I still
-waiting" — call my_activity_buddies. That is a LOOKUP, not a search. Running
+waiting", "who do I swim with", "can I go again with them" — call
+my_activity_buddies. That is a LOOKUP, not a search. Running
 find_activity_buddies instead searches strangers' adverts and comes back
 empty, which reads as "that person does not exist" when they are sitting in
 the user's accepted list.

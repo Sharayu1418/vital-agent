@@ -1329,6 +1329,32 @@ def decide_activity_request(request_id: int, req: BuddyRequestDecision,
                                    request_id, req.status)}
 
 
+# NOT /connections — that is the wearable providers route. These are people.
+@app.get("/buddy-connections")
+def my_buddy_connections(response: Response, include_ended: bool = False,
+                         ident: Identity = Depends()) -> dict:
+    user_id, new_session = ident.resolve()
+    _set_session(response, new_session)
+    return {"connections": buddies.my_connections(user_id,
+                                                  include_ended=include_ended)}
+
+
+@app.delete("/buddy-connections/{connection_id}")
+def end_buddy_connection(connection_id: int, response: Response,
+                         ident: Identity = Depends()) -> dict:
+    """Either side may end it, without the other's agreement.
+
+    DELETE, because that is what it means to the person clicking it. The row
+    is marked ended rather than removed — reconnecting later revives the same
+    relationship, and a member should not be able to erase the record of a
+    meeting that went badly.
+    """
+    user_id, new_session = ident.resolve()
+    _set_session(response, new_session)
+    return {"connection": _buddy_call(buddies.end_connection, user_id,
+                                      connection_id)}
+
+
 @app.get("/activity-requests/{request_id}/meeting.pdf")
 def meeting_plan(request_id: int, ident: Identity = Depends()):
     """Where these two should meet, as a PDF.

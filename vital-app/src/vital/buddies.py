@@ -372,12 +372,20 @@ def my_requests(user_id: str) -> dict:
 
 
 def decide_request(user_id: str, request_id: int, status: str) -> dict:
-    """Accept/reject — only the owner of the TARGET POST may decide."""
+    """Accept/reject — only the owner of the TARGET POST may decide.
+
+    An acceptance also creates a CONNECTION, which is the durable record.
+    The request row stays as history of the decision; the connection is the
+    relationship, and it outlives the post either side may later edit,
+    deactivate or delete.
+    """
     if status not in ("accepted", "rejected"):
         raise ValueError("status must be accepted or rejected")
     with _conn() as c:
         row = c.execute(
-            """SELECT q.id, q.post_id, q.status, p.user_id AS owner_id
+            """SELECT q.id, q.post_id, q.status, q.requester_user_id,
+                      q.requester_name, p.user_id AS owner_id,
+                      p.display_name AS owner_name, p.activity, p.city
                FROM activity_requests q JOIN activity_posts p ON p.id = q.post_id
                WHERE q.id = ?""", (request_id,)).fetchone()
         if row is None:
@@ -386,7 +394,118 @@ def decide_request(user_id: str, request_id: int, status: str) -> dict:
             raise PermissionError("only the post owner can decide this request")
         c.execute("UPDATE activity_requests SET status = ?, updated_at = ? WHERE id = ?",
                   (status, _now(), request_id))
+        if status == "accepted":
+            _record_connection(
+                c, owner_id=row["owner_id"], owner_name=row["owner_name"],
+                other_id=row["requester_user_id"],
+                other_name=row["requester_name"],
+                activity=row["activity"], city=row["city"],
+                post_id=row["post_id"])
     return {"id": request_id, "post_id": row["post_id"], "status": status}
+
+
+# ---------- connections: the part that outlives the post ----------
+
+def _pair(x: str, y: str) -> tuple[str, str]:
+    """Canonical ordering, so one relationship is one row.
+
+    Without it the same two people produce two different rows depending on
+    who happened to post and who happened to ask, and "are these two already
+    connected" becomes a query in both directions that somebody will
+    eventually write in only one.
+    """
+    return (x, y) if x <= y else (y, x)
+
+
+def _record_connection(c, *, owner_id, owner_name, other_id, other_name,
+                       activity, city, post_id) -> None:
+    """Snapshot an accepted match. Idempotent on (pair, activity).
+
+    Names and activity are COPIED, not referenced. That is the entire point:
+    a connection that reads the post for its display name is still a post
+    with extra steps, and disappears the moment the post does.
+
+    Re-accepting the same activity revives an ended connection rather than
+    inserting a duplicate — two people who stopped swimming together and
+    later started again are the same relationship, not a second one.
+    """
+    user_a, user_b = _pair(owner_id, other_id)
+    name_a, name_b = ((owner_name, other_name) if user_a == owner_id
+                      else (other_name, owner_name))
+    now = _now()
+    existing = c.execute(
+        "SELECT id FROM connections WHERE user_a = ? AND user_b = ? "
+        "AND activity = ?", (user_a, user_b, activity)).fetchone()
+    if existing:
+        c.execute("UPDATE connections SET status = 'active', ended_by = NULL, "
+                  "name_a = ?, name_b = ?, updated_at = ? WHERE id = ?",
+                  (name_a, name_b, now, existing["id"]))
+        return
+    c.execute(
+        """INSERT INTO connections
+           (user_a, user_b, name_a, name_b, activity, city, origin_post_id,
+            status, ended_by, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'active', NULL, ?, ?)""",
+        (user_a, user_b, scrub_contact_info(name_a) or "A VITAL member",
+         scrub_contact_info(name_b) or "A VITAL member",
+         activity, city, post_id, now, now))
+
+
+def my_connections(user_id: str, include_ended: bool = False) -> list[dict]:
+    """People this user has actually agreed to do something with.
+
+    Returns the OTHER person each time — never a raw user_id, only the
+    opaque public key and the name they were known by. Blocked pairs are
+    filtered in both directions, matching search_posts: blocking somebody
+    has to remove them from every surface, or it is a setting rather than a
+    protection.
+    """
+    with _conn() as c:
+        rows = [dict(r) for r in c.execute(
+            "SELECT * FROM connections WHERE user_a = ? OR user_b = ? "
+            "ORDER BY updated_at DESC", (user_id, user_id)).fetchall()]
+        my_key = public_user_key(user_id)
+        i_blocked = {r["blocked_key"] for r in c.execute(
+            "SELECT blocked_key FROM user_blocks WHERE user_id = ?",
+            (user_id,)).fetchall()}
+        blocked_me = {r["user_id"] for r in c.execute(
+            "SELECT user_id FROM user_blocks WHERE blocked_key = ?",
+            (my_key,)).fetchall()}
+
+    out = []
+    for row in rows:
+        if row["status"] != "active" and not include_ended:
+            continue
+        mine_is_a = row["user_a"] == user_id
+        other_id = row["user_b"] if mine_is_a else row["user_a"]
+        other_name = row["name_b"] if mine_is_a else row["name_a"]
+        other_key = public_user_key(other_id)
+        if other_key in i_blocked or other_id in blocked_me:
+            continue
+        out.append({
+            "id": row["id"], "name": other_name, "member_key": other_key,
+            "activity": row["activity"], "city": row["city"],
+            "status": row["status"], "since": row["created_at"],
+        })
+    return out
+
+
+def end_connection(user_id: str, connection_id: int) -> dict:
+    """Either side may end it, and neither needs the other's agreement.
+
+    Marked ended rather than deleted, so re-accepting later revives the same
+    relationship instead of creating a second one — and so a member cannot
+    quietly erase the record of a meeting that went wrong.
+    """
+    with _conn() as c:
+        row = c.execute("SELECT * FROM connections WHERE id = ?",
+                        (connection_id,)).fetchone()
+        if row is None or user_id not in (row["user_a"], row["user_b"]):
+            raise LookupError("connection not found")
+        c.execute("UPDATE connections SET status = 'ended', ended_by = ?, "
+                  "updated_at = ? WHERE id = ?",
+                  (public_user_key(user_id), _now(), connection_id))
+    return {"id": connection_id, "status": "ended"}
 
 
 # ---------- moderation placeholders ----------
