@@ -51,8 +51,47 @@ def find_activity_buddies(activity: str, city: str | None = None,
     return {"matches": posts, "count": len(posts), "safety_note": buddies.SAFETY_NOTE}
 
 
+@tool
+def my_activity_buddies() -> dict:
+    """The user's OWN buddy requests — who they asked, who asked them, and
+    which were accepted. Read this before answering anything about a named
+    person, a past request, or an existing connection.
+
+    find_activity_buddies searches STRANGERS' open posts. It cannot answer
+    "who accepted my swimming request" or "am I still waiting on anyone",
+    because those are facts about this user, not an advert on the board.
+
+    Returns {'outgoing': [...], 'incoming': [...]}, each entry carrying the
+    activity, a display name, a status of pending/accepted/rejected, and the
+    date. Accepting or declining is NOT available to you — that is a click
+    the user makes in the Activity Buddies panel, because it shares their
+    approximate location with another person.
+    """
+    try:
+        return {**buddies.my_requests(storage.current_user_id.get()),
+                "safety_note": buddies.SAFETY_NOTE}
+    except Exception as exc:  # storage failure must degrade, not crash the turn
+        return {"error": f"buddy history unavailable ({type(exc).__name__})"}
+
+
 SYSTEM_PROMPT = """You are VITAL's People Connector. The user wants to find \
 people, groups, or places to share an interest with.
+
+FIRST, decide which question you are being asked.
+
+If it is about someone the user ALREADY has a connection with — a name, "who
+accepted", "did anyone reply", "the person I matched with", "am I still
+waiting" — call my_activity_buddies. That is a LOOKUP, not a search. Running
+find_activity_buddies instead searches strangers' adverts and comes back
+empty, which reads as "that person does not exist" when they are sitting in
+the user's accepted list.
+
+Never say you have no access to their requests or history. You do. Call
+my_activity_buddies and answer from it. If it returns nothing relevant, say
+that specifically — "I don't see an accepted swimming request" is useful;
+"I can't see your requests" is false.
+
+Otherwise the user wants NEW people, and the order below applies.
 
 Work in this order — most human first:
 1. get_user_interests; if the message names an interest, use that.
@@ -98,6 +137,8 @@ def build_agent():
     llm = ChatVertexAI(model=cfg.vital_model, temperature=0.4,
                        project=cfg.google_cloud_project, location=cfg.google_cloud_location)
     return create_react_agent(
-        llm, tools=[get_user_interests, find_activity_buddies,
-                    search_places, search_events],
+        # my_activity_buddies before find_activity_buddies: the lookup is the
+        # one people reach for by name, and the search is the fallback.
+        llm, tools=[get_user_interests, my_activity_buddies,
+                    find_activity_buddies, search_places, search_events],
         prompt=SYSTEM_PROMPT)
