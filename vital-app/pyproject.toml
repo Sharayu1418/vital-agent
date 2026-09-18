@@ -14,7 +14,7 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     "e2b-code-interpreter>=1.0",
-    "python-multipart>=0.0.18",
+    "python-multipart>=0.0.32",
     "firebase-admin>=6.5",
     # Buddy meeting-point document. Pure Python, no system libraries, and
     # it starts instantly on Cloud Run — a headless-browser renderer would
