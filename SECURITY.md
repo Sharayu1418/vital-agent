@@ -12,10 +12,7 @@ control nobody can find is a control nobody can review.
 ## Reporting a vulnerability
 
 Open a private security advisory on the repository, or email
-srr10019@nyu.edu. Please don't open a public issue for anything
-exploitable. This is a personal project, so expect a response in days
-rather than hours.
-
+srr10019@nyu.edu.
 ---
 
 ## Identity — the browser never says who it is
