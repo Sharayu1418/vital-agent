@@ -15,7 +15,7 @@ Open a private security advisory on the repository, or email
 srr10019@nyu.edu.
 ---
 
-## Identity — the browser never says who it is
+## Identity the browser never says who it is
 
 Three caller kinds, resolved server-side in
 [`security.py`](vital-app/src/vital/security.py):
@@ -42,7 +42,7 @@ Rules that do not soften:
 
 ---
 
-## Actions that touch the world — security by topology
+## Actions that touch the world security by topology
 
 `commit_plan` is the only node that writes to your calendar. It has **no
 inbound edge** except the resume from a human approval interrupt
