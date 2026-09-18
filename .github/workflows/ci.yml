@@ -41,7 +41,7 @@ jobs:
       run:
         working-directory: vital-app
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -131,7 +131,7 @@ jobs:
       run:
         working-directory: vital-web
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: pnpm/action-setup@v4
         with:
@@ -183,7 +183,7 @@ jobs:
       run:
         working-directory: vital-mobile
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: pnpm/action-setup@v4
         with:
