@@ -196,5 +196,27 @@ Stated plainly, because a threat model that only lists wins is marketing.
   still give unhelpful advice. It is explicitly not a medical device.
 - **Traffic analysis.** Everything is TLS, but request timing and size are
   not padded.
-- **Supply chain.** Dependencies are pinned by lockfile and not currently
-  scanned automatically. That is the most obvious next addition.
+- **Supply chain.** Dependencies are pinned by lockfile and scanned on every
+  push. `pip-audit` runs against the exported `uv.lock` — the versions that
+  actually ship, not a fresh resolution — and `pnpm audit` runs for both
+  frontends. Dependabot proposes the upgrades.
+
+  What the Python gate blocks on is worth stating precisely, because it is
+  not "any vulnerability": it fails the build when a finding **has a
+  published fix**, and reports without failing when it does not. Severity is
+  not the lever, since OSV severity is patchy and describes the worst case
+  for any consumer rather than for this app; "is there a version to move to"
+  is a much better proxy for "somebody can act on this today". A build that
+  goes red for something nobody can fix gets ignored, and an ignored check
+  protects nothing.
+
+  Suppressions live in `vital-app/audit-ignore.txt` and require a written
+  reason — a bare ID fails the job.
+
+  **What this does not cover.** A scan compares installed versions against
+  known advisories, so it says nothing about a compromised package that
+  nobody has reported yet, a typosquat that was never a legitimate package,
+  or a malicious postinstall script. Lockfiles limit those, since a
+  dependency cannot change underneath a pinned version, but they do not
+  eliminate them. The frontend check is severity-based rather than
+  fix-based, which is a weaker rule than the Python one.

@@ -1,0 +1,22 @@
+# Vulnerabilities this build deliberately does not fail on.
+#
+# Format:   <ID>  # why
+#
+# The reason is MANDATORY — a bare ID makes the audit job exit 2. That is not
+# pedantry. A suppression list without reasons becomes a list of things
+# somebody once wanted to stop thinking about, and after a few months nobody
+# can tell an accepted risk from a forgotten one.
+#
+# You do NOT need an entry for a vulnerability with no published fix. Those
+# are reported and do not block, because there is nothing to do about them
+# yet. This file is only for findings that ARE fixable and that we are
+# consciously choosing not to fix right now — which means every line should
+# be embarrassing enough to get removed.
+#
+# Either the PYSEC id or a CVE/GHSA alias works, so you can paste whichever
+# the advisory gave you.
+#
+# Example:
+#   PYSEC-2026-1234  # fix needs urllib3 3.x; blocked on google-auth pinning <3
+#
+# Currently empty, and the intention is that it stays that way.

@@ -1,0 +1,71 @@
+# Dependabot: the half of dependency scanning that proposes the fix.
+#
+# CI's audit job answers "is anything we depend on known-vulnerable, and can
+# it be fixed today". It deliberately does not answer "so fix it" — a CI job
+# cannot open a pull request. Without something in this file, a red audit is
+# a chore somebody has to notice and then do by hand, which is the state most
+# repositories describe as "we scan dependencies" while nothing moves.
+#
+# Weekly, not daily. Three ecosystems on a daily cadence produces more pull
+# requests than a one-person project will ever review, and an unreviewed
+# Dependabot backlog is indistinguishable from not having it.
+#
+# The open-PR limits are low for the same reason. If the cap is being hit,
+# that is information: the dependencies have drifted far enough that a
+# deliberate upgrade session beats a queue of individual bumps.
+version: 2
+
+updates:
+  # --- Python (vital-app) -------------------------------------------------
+  # uv.lock is the file that matters. It was gitignored until recently, which
+  # meant CI resolved its own versions on every run and nothing here would
+  # have had a lockfile to update.
+  - package-ecosystem: pip
+    directory: /vital-app
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for the routine patch/minor churn. Reviewing eleven separate
+      # bumps of transitive libraries is how people start rubber-stamping.
+      # Majors stay separate because those are the ones that break things.
+      python-minor-and-patch:
+        update-types: [minor, patch]
+
+  # --- Web frontend -------------------------------------------------------
+  - package-ecosystem: npm
+    directory: /vital-web
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      web-minor-and-patch:
+        update-types: [minor, patch]
+
+  # --- Mobile shell -------------------------------------------------------
+  # Expo pins its own SDK-matched versions; a Dependabot bump of a single
+  # expo-* package against a fixed SDK is usually wrong. Majors only, so the
+  # noise stays low and an SDK upgrade is handled deliberately.
+  - package-ecosystem: npm
+    directory: /vital-mobile
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2
+    ignore:
+      - dependency-name: expo*
+        update-types: [version-update:semver-minor, version-update:semver-patch]
+      - dependency-name: react-native
+        update-types: [version-update:semver-minor, version-update:semver-patch]
+
+  # --- The workflows themselves -------------------------------------------
+  # Action versions rot silently and are a supply-chain surface in their own
+  # right: a third-party action runs with the workflow's token. These were
+  # deliberately not bumped by hand, because guessing tags is a good way to
+  # turn a green pipeline red for no reason. Dependabot does not guess.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3

@@ -89,6 +89,40 @@ jobs:
       - name: Lint
         run: uv run ruff check src tests scripts
 
+      # SECURITY.md used to end its threat model with "dependencies are
+      # pinned by lockfile and not currently scanned automatically. That is
+      # the most obvious next addition." This is that addition — and it only
+      # became possible when uv.lock was committed, because before then there
+      # was no stable set of versions to scan.
+      #
+      # Three deliberate choices:
+      #
+      # --no-deps, against the EXPORTED lock rather than pyproject. Letting
+      # pip-audit resolve its own versions would audit an application nobody
+      # runs — the identical mistake as CI resolving fresh from PyPI.
+      #
+      # `|| true`, because pip-audit exits 1 on any finding at all. Which
+      # findings should stop a build is a policy question, and it lives in
+      # audit_gate.py where it can be read and tested, not in an exit code.
+      #
+      # --min-packages, because a scan of nothing exits 0 and renders exactly
+      # like a clean scan. That is not hypothetical: the first end-to-end run
+      # of this fed pip-audit an empty file and got back "no known
+      # vulnerabilities". A green build under a SECURITY.md that claims
+      # scanning is worse than the honest paragraph it replaced.
+      - name: Export the locked dependency set
+        run: >
+          uv export --frozen --no-emit-project --no-hashes
+          --format requirements-txt -o /tmp/audit-requirements.txt
+
+      - name: Audit dependencies
+        run: |
+          uv run --with pip-audit pip-audit \
+            -r /tmp/audit-requirements.txt --no-deps \
+            --format json -o /tmp/audit.json || true
+          uv run python scripts/audit_gate.py /tmp/audit.json \
+            --ignore-file audit-ignore.txt --min-packages 50
+
   frontend:
     name: frontend build
     runs-on: ubuntu-latest
@@ -112,6 +146,21 @@ jobs:
           cache-dependency-path: vital-web/pnpm-lock.yaml
 
       - run: pnpm install --frozen-lockfile
+
+      # Coarser than the Python gate, on purpose, and worth saying why.
+      #
+      # audit_gate.py blocks on "a fix exists", which is a far better proxy
+      # for "somebody can act on this" than severity. pnpm does not expose
+      # that reliably, and writing a parser for its advisory JSON would mean
+      # writing one against a shape I could not verify against the real tool
+      # — which is exactly how the Python gate came to report a scan of zero
+      # packages as clean. So this uses the lever pnpm actually gives.
+      #
+      # high and above only. Every npm tree carries low-severity advisories
+      # in build tooling forever; blocking on those is how a check gets
+      # switched off.
+      - name: Audit dependencies
+        run: pnpm audit --audit-level high
 
       - name: Unit tests
         run: pnpm test
@@ -149,6 +198,11 @@ jobs:
       # Catches a package.json edited without regenerating the lockfile —
       # the same class of problem as the uv.lock that was never committed.
       - run: pnpm install --frozen-lockfile
+
+      # See the frontend job for why this is severity-based rather than
+      # fix-availability-based like the Python gate.
+      - name: Audit dependencies
+        run: pnpm audit --audit-level high
 
       # A full Expo build needs EAS: slow, paid, and overkill for asking
       # "does this still compile". Bundling with the native packages marked
