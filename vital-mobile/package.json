@@ -10,7 +10,7 @@
     "build:android": "eas build --platform android"
   },
   "dependencies": {
-    "expo": "~52.0.0",
+    "expo": "~57.0.23",
     "expo-constants": "~17.0.0",
     "expo-document-picker": "~13.0.0",
     "expo-secure-store": "~14.0.0",
