@@ -69,7 +69,7 @@ If it fails: read the misses. Each is a genuine gap, and the fix is usually a li
 
 ## 6. Deploy, then smoke test
 
-Full checklist in `WEEK1-HANDOFF.md`. The four that matter most, because no test can prove them:
+The four checks that matter most, because no test can prove them:
 
 - **Upload a real Apple Health `export.zip`** and watch container memory. It should stay flat. This is the OOM fix.
 - **Two accounts at once**: long chat in one, load the panel in the other. Neither should stall.

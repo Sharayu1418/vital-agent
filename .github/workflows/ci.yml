@@ -125,3 +125,45 @@ jobs:
           # frontend deployed pointing at nothing looks fine and works for
           # nobody. CI only needs it to be present and well-formed.
           NEXT_PUBLIC_API_BASE: https://ci.invalid
+
+  mobile:
+    name: mobile check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: vital-mobile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: vital-mobile/pnpm-lock.yaml
+
+      # Catches a package.json edited without regenerating the lockfile —
+      # the same class of problem as the uv.lock that was never committed.
+      - run: pnpm install --frozen-lockfile
+
+      # A full Expo build needs EAS: slow, paid, and overkill for asking
+      # "does this still compile". Bundling with the native packages marked
+      # external resolves every LOCAL import and parses every file, which
+      # catches the two ways this app actually rots — a syntax error, and an
+      # import that no longer points at anything. Verified by mutation:
+      # renaming ./lib/sky fails with "Could not resolve", and a stray brace
+      # fails with "Expected identifier".
+      #
+      # Until now nothing verified this app at all. The only thing touching
+      # it was the byte-identity check on lib/sky.js in the web suite.
+      - name: Compile check
+        run: >
+          npx --yes esbuild@0.25.10 App.jsx --bundle --loader:.jsx=jsx
+          --platform=neutral
+          --external:react --external:react-native
+          --external:expo --external:expo-* --external:expo/*
+          --outfile=/dev/null
