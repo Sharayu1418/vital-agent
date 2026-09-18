@@ -1,7 +1,7 @@
 """Events adapter tests (respx, no keys/network).
 
-Community search no longer has a third-party provider — see
-docs/LIMITATIONS.md. People Connector coverage lives in
+Community search no longer has a third-party provider: six community APIs
+closed in six years. People Connector coverage lives in
 test_people_connector.py.
 """
 import os

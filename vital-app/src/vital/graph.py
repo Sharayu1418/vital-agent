@@ -94,7 +94,24 @@ def _agent_node(agent, store):
                 f"(latitude {here['lat']}, longitude {here['lng']}). "
                 "This is live from their device and OVERRIDES any location "
                 "in the stored facts above. Use it for weather, venue and "
-                "event searches without asking them where they are.")
+                "event searches without asking them where they are. "
+                "Call those tools with NO city argument — the server applies "
+                "these coordinates directly, which is more accurate than any "
+                "name you could pass.")
+        else:
+            # Saying nothing was the bug. The tool descriptions promise that
+            # omitting `city` uses the user's coordinates, and on a client
+            # that sends none — vital-mobile has no location library at all —
+            # that promise is simply false. The agent would omit the city,
+            # get "no location available", and only then ask. Recoverable,
+            # but it spends a turn learning something we knew before the
+            # turn started.
+            context.append(
+                "VITAL does NOT have this user's location for this request. "
+                "Tools that take a city cannot fall back to their coordinates, "
+                "so ask the user where they are before searching for weather, "
+                "venues or events — unless the stored facts above already say, "
+                "in which case pass that city explicitly.")
 
         if context:
             messages = [SystemMessage(content="\n\n".join(context))] + messages

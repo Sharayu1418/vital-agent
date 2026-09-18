@@ -351,7 +351,58 @@ numbers next to the results."
 
 ---
 
-## 6. Use the coordinates we already have
+## 6. Use the coordinates we already have — BUILT
+
+**Done.** `get_weather`, `search_places` and `search_events` all take an
+optional city now and prefer the device fix. The decision lives once in
+`vital/tools/where.py`: no city means here; a city that echoes our own label
+also means here and gets upgraded to coordinates; a coordinate string is
+parsed rather than sent to a name-only endpoint; a different name is honoured;
+nothing at all is reported rather than guessed.
+
+**This item undercounted its own scope by one tool.** It named `get_weather`
+and `search_places`. `search_events` had the identical signature and the
+identical bug, and would have been left behind by a literal reading — the
+plan was a description of the problem, not an inventory of it.
+
+Three things the work turned up that the plan did not predict:
+
+- **A guaranteed-failure path, not a lossy one.** `set_location` falls back to
+  a `"42.65, -73.76"` label when the geocoder returns nothing. The agent was
+  then told that string was the user's location, passed it as `city`, and
+  OpenWeather's `q=` takes names only. Any user whose fix did not reverse-
+  geocode got an error every single time.
+- **`recommend.find_activities` passed `city or "nearby"`** — directly beneath
+  a comment promising it would not invent a location. Places has no idea what
+  "nearby" is, so `"<query> in nearby"` ran an unbiased global search and the
+  results came back rendered exactly like local ones.
+- **Silence was a claim.** The tool descriptions now say "omit city, the
+  server holds your coordinates". On a client that sends none — vital-mobile
+  has no location library — that is false, and `graph.py` said nothing either
+  way. It now states the absence explicitly instead of letting the agent
+  discover it from a failed call.
+
+**Measured:** 27 new tests, 569 backend passing, ruff clean. Nine mutations
+checked (device branch disabled, `q=` while holding coordinates, `"nearby"`
+restored, echo rule loosened to substring, geohash `>` vs `>=`, radius unit
+dropped, events forced onto the name path, both `graph.py` branches silenced)
+— each fails only the tests that should catch it.
+
+**Two golden values came from memory and one was wrong**, again. The Curitiba
+geohash: recalled as `6gkzwgjz`, actually `6gkzwgjt`. Settled by decoding both
+boxes and checking which contains the point, which is also now a test — a
+decoder is a different computation from an encoder, so it needs no published
+table and no recall. Same failure as the solar altitude typed from memory two
+weeks ago, caught the same way.
+
+**Not covered:** no live model has called any of this. The docstring test
+asserts the instruction is present, not that Gemini follows it — which is
+precisely why the echo-upgrade branch exists rather than trusting the prompt.
+
+---
+
+<details>
+<summary>The original plan entry</summary>
 
 **What it is**
 
@@ -383,7 +434,10 @@ That's a good story. It's already half-done, so finish it.
   meetup PDF
 - The `storage.current_location` contextvar that already exists
 
-**Effort:** half a day.
+**Effort:** half a day. (Actual: about that, including the tool the plan
+did not list.)
+
+</details>
 
 ---
 

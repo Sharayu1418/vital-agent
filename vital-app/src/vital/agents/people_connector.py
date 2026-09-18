@@ -7,7 +7,7 @@ Groups, Eventbrite search and Strava clubs all closed or went paid between
 while degrading gracefully enough that nobody noticed. Community discovery
 now runs on things we own or that are commoditised: the Activity Buddy
 Board (ours), Google Places (where an activity actually happens), and
-Ticketmaster (ticketed events). See docs/LIMITATIONS.md.
+Ticketmaster (ticketed events). See providers/__init__.py for why.
 
 v2 (backlog): opt-in VITAL-user matching via pgvector interest embeddings.
 """

@@ -9,7 +9,7 @@ The seam is deliberately narrow. Everything provider-specific (OAuth
 endpoints, response shapes, token quirks) lives inside the adapter;
 everything shared (encrypted token storage, sync scheduling, connection
 status, failure reporting) lives outside it in sync.py. That boundary is
-the point: LIMITATIONS.md records that six community APIs closed in six
+the point: six community APIs closed in six
 years, and wearable APIs are the same class of dependency — the Fitbit Web
 API is being decommissioned mid-2026 with no token migration. Providers
 here should be assumed to be temporary.

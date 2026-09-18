@@ -11,7 +11,7 @@ from langchain_core.tools import tool
 from pydantic import BaseModel
 
 from vital.config import settings
-from vital.tools import where as where_mod
+from vital.tools import where
 
 _BASE = "https://api.openweathermap.org/data/2.5"
 
@@ -40,7 +40,7 @@ def get_weather(city: str | None = None) -> dict:
     the user so, and prefer weather-safe (indoor) recommendations.
     """
     cfg = settings()
-    place = where_mod.resolve(city)
+    place = where.resolve(city)
     if not place.known:
         # Deliberately not a guess. `city` used to be required, so the model
         # always supplied SOMETHING — sometimes a city inferred from an old

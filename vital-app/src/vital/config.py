@@ -144,7 +144,7 @@ class Settings(BaseSettings):
     # third-party community API closed between 2019 and 2026 (Reddit,
     # Meetup, Facebook Groups, Eventbrite search, Strava clubs). Community
     # discovery is served by Google Places + the Activity Buddy Board
-    # instead — see docs/LIMITATIONS.md before adding another one.
+    # instead — see providers/__init__.py before adding another one.
 
     # --- Phase 4: guardrails ---
     daily_token_budget: int = 50_000   # per user; ~$0.05/day at Flash prices

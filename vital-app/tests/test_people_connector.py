@@ -4,7 +4,7 @@ The point of these tests is to keep a decision from silently eroding.
 Community discovery deliberately has NO third-party provider — every one
 closed between 2019 and 2026, and the Reddit integration sat dead in
 production for months because graceful degradation reported it as a
-transient outage every time. See docs/LIMITATIONS.md.
+transient outage every time.
 """
 import os
 

@@ -140,10 +140,42 @@ def test_memory_still_reaches_the_agent_without_a_location():
     assert "pottery" in context
 
 
-def test_no_facts_and_no_location_adds_no_system_message():
-    """An empty 'Known about this user:' line is noise that costs tokens on
-    every single turn."""
-    assert _context_for([], None) == ""
+def test_no_facts_and_no_location_says_so_instead_of_saying_nothing():
+    """CHANGED DELIBERATELY. This used to assert an empty context, on the
+    grounds that an empty 'Known about this user:' line is noise costing
+    tokens every turn. That reasoning was right about the empty line and is
+    no longer right about the absence of a location, because the tool
+    descriptions now promise something that silence makes false:
+
+        "OMIT `city` — the server holds their exact coordinates"
+
+    On a client that sends no coordinates — vital-mobile has no location
+    library at all — the agent omits the city, gets back "no location
+    available", and only then asks. Recoverable, but it spends a turn
+    discovering something that was knowable before the turn began.
+
+    The token objection survives in weaker form: this line is added on every
+    locationless turn. That is the minority case on the live surface, which
+    is the subset where it is worth paying for.
+    """
+    context = _context_for([], None)
+    assert "does NOT have this user's location" in context
+    assert "ask the user where they are" in context.lower()
+
+
+def test_the_no_location_line_does_not_appear_when_there_is_one():
+    """The two branches must be exclusive. Telling an agent both that it has
+    coordinates and that it does not is worse than telling it neither."""
+    context = _context_for([], ("40.7128", "-74.0060", "New York"))
+    assert "does NOT have" not in context
+
+
+def test_a_located_agent_is_told_to_omit_the_city_argument():
+    """The whole point of the tools taking optional coordinates. Without
+    this the model keeps passing the name it read two lines above, which is
+    the centroid round trip the change exists to remove."""
+    context = _context_for([], ("40.7128", "-74.0060", "New York"))
+    assert "NO city" in context
 
 
 def test_the_agent_is_told_not_to_ask_where_they_are():
