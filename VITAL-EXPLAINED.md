@@ -1,49 +1,22 @@
-# VITAL — the whole thing, explained
+# VITAL explained
 
-A complete walkthrough of what VITAL is, how it works, what we chose and
-why, what broke, and what we learned. Written so you can explain it to an
-engineer, a recruiter, or your mum, depending on which section you read.
-
----
-
-## 1. What VITAL is, in one paragraph
+## 1. What VITAL is
 
 VITAL is an **energy copilot**. You talk to it in plain language — "I slept
-badly, what should I do today?" — and it routes you to the right specialist,
+badly, what should I do today?" and it routes you to the right specialist,
 remembers durable facts about you, predicts when you'll actually have energy,
 and turns all of that into a concrete schedule that you approve before
 anything is committed. It reads your Fitbit sleep data, forecasts your energy
 curve for the next 24–72 hours, and plans your day around your predicted
 peaks and dips instead of generic advice.
 
-**The one-sentence pitch:** most wellness apps tell you what happened; VITAL
+Most wellness apps tell you what happened; VITAL
 tells you what's *going to* happen and schedules around it.
 
 ---
 
-## 2. The 60-second version
 
-> VITAL is a multi-agent AI assistant for managing your energy. A router
-> model reads your message and sends it to one of four specialists — sleep,
-> activities, ideas, or people. Each specialist has real tools: weather,
-> maps, ticketing, a sandboxed Python environment for analysing your health
-> data. A separate planner turns the conversation into a schedule, which
-> pauses and waits for your approval before it can write anything.
->
-> Underneath, three things make it personal: **semantic memory** (it
-> remembers "you're into pottery" and retrieves it when you ask about
-> ceramics), an **energy forecast** built from a real sleep-science model
-> keyed to your own wake time, and **wearable sync** that pulls your actual
-> sleep from Fitbit.
->
-> It's a Python/FastAPI backend on Google Cloud Run, a Next.js frontend on
-> Vercel, LangGraph for the agent orchestration, Gemini for the models, and
-> Postgres with pgvector for memory. About 6,000 lines of backend, 3,000 of
-> frontend, and 5,800 lines of tests.
-
----
-
-## 3. End to end: the life of one message
+## 2. End to end: the life of one message
 
 This is the flow to walk someone through. Everything else in this document
 is detail hanging off this spine.
@@ -96,7 +69,7 @@ sequenceDiagram
 
 ---
 
-## 4. The map: what lives where
+## 3. The map: what lives where
 
 ```
 VITAL/
@@ -156,10 +129,6 @@ VITAL/
 ├── vital-mobile/               Expo shell. Not yet a real client.
 └── docs/                       LIMITATIONS.md, OBSERVABILITY.md
 ```
-
-**The rule that keeps this navigable:** every file has one job, and the file
-header says what it is and *why it exists*. Most headers describe a bug that
-justified the file.
 
 ---
 
@@ -221,7 +190,7 @@ That's the difference between a guardrail and a wall. This is a wall.
 
 ---
 
-## 7. The energy forecast — the actual differentiator
+## 7. The energy forecast the actual differentiator
 
 Everything else in VITAL looks backward. This is the only part that predicts.
 
