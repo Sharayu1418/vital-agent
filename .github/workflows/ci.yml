@@ -137,7 +137,7 @@ jobs:
         with:
           version: 9
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # 20 reached end of life in April 2026 — no security patches. The
           # frontend suite passes on 22; verified locally on 22.22.
@@ -189,7 +189,7 @@ jobs:
         with:
           version: 9
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
