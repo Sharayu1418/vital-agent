@@ -675,7 +675,7 @@ matters.
 **"What's actually hard about this?"**
 Not the chat. The hard parts are: making a forecast that's honest about its
 own uncertainty, making human approval structurally impossible to bypass,
-and keeping the tests measuring the same thing production does — which we
+and keeping the tests measuring the same thing production does which we
 got wrong five times before we understood the pattern.
 
 **"Why multiple agents instead of one big prompt?"**
