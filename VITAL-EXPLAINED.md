@@ -55,8 +55,6 @@ sequenceDiagram
     A->>A: Log tokens used, tool outcomes, latency
 ```
 
-**The parts worth pointing out when you explain this:**
-
 - Step 4–5: the crisis screen runs **in parallel** with the graph, not
   before it. Stacking them added ~1.5s to every message. Overlapping them
   made it free.
@@ -132,7 +130,7 @@ VITAL/
 
 ---
 
-## 5. The technology stack, and why each piece
+## 4. The technology stack, and why each piece
 
 | Layer | Choice | Why this one |
 |---|---|---|
@@ -152,7 +150,7 @@ VITAL/
 
 ---
 
-## 6. Architecture: the graph
+## 5. Architecture: the graph
 
 ```mermaid
 graph TD
@@ -180,8 +178,8 @@ graph TD
     style CP fill:#a33,color:#fff
 ```
 
-**The security insight worth explaining:** `commit_plan` — the only node
-that writes to your calendar — has **no inbound edge except the human
+**The security insight worth explaining:** `commit_plan` the only node
+that writes to your calendar has **no inbound edge except the human
 approval resume**. It is not "the model decides not to write"; it is
 *topologically unreachable* without a human click. No prompt injection can
 route to it, because there is no route.
@@ -190,7 +188,7 @@ That's the difference between a guardrail and a wall. This is a wall.
 
 ---
 
-## 7. The energy forecast the actual differentiator
+## 6. The energy forecast the actual differentiator
 
 Everything else in VITAL looks backward. This is the only part that predicts.
 
@@ -227,7 +225,7 @@ The resulting curve, for a 7am wake:
 
 | Time since waking | Energy | What's happening |
 |---|---|---|
-| 0h | 0.57 | Groggy — sleep inertia |
+| 0h | 0.57 | Groggy - sleep inertia |
 | **3.5h** | **0.86** | **Peak.** Inertia gone, pressure still low |
 | 8.5h | 0.64 | **Dip.** Circadian trough plus accumulated pressure |
 | 11h | 0.68 | Partial second wind |
@@ -235,7 +233,7 @@ The resulting curve, for a 7am wake:
 
 The constants weren't guessed. They were **solved numerically** against the
 target shape, and the tests re-derive the peak, dip, rebound and decline
-*from* the constants — so if someone tunes a number and the shape breaks,
+*from* the constants, so if someone tunes a number and the shape breaks,
 the build fails.
 
 ### Why confidence matters as much as the curve
@@ -269,7 +267,7 @@ a dip."
 
 ---
 
-## 8. Memory — how it knows you
+## 7. Memory — how it knows you
 
 ```mermaid
 graph TD
@@ -314,9 +312,9 @@ sidebar with a delete button. Nothing is hidden.
 
 ---
 
-## 9. Safety — four independent mechanisms
+## 8. Safety : four independent mechanisms
 
-### 9.1 Crisis detection: a cascade, not a keyword list
+### 8.1 Crisis detection: a cascade, not a keyword list
 
 ```mermaid
 graph TD
@@ -340,12 +338,12 @@ abandoned futures. An earlier version used `with ThreadPoolExecutor(...)`,
 whose `__exit__` calls `shutdown(wait=True)` — which made the timeout
 completely useless. The test failed at 30 seconds and told us.
 
-### 9.2 Human-in-the-loop as topology
+### 8.2 Human-in-the-loop as topology
 
 Covered in section 6. Worth repeating because it's the strongest idea in the
 codebase: **security by graph shape, not by instruction.**
 
-### 9.3 Sandboxed code execution
+### 8.3 Sandboxed code execution
 
 When you ask "what's my sleep debt over the last month", a model writes
 pandas code and runs it. Two independent layers:
@@ -359,7 +357,7 @@ Honest limitation, documented in the code: the microVM may still have
 outbound internet on the free tier, so exfiltration control is the static
 gate's URL ban, not the VM.
 
-### 9.4 Identity is never claimed by the client
+### 8.4 Identity is never claimed by the client
 
 Three caller kinds, and rules that never soften:
 
@@ -375,7 +373,7 @@ Three caller kinds, and rules that never soften:
 
 ---
 
-## 10. Data and integrations: the dependency taxonomy
+## 9. Data and integrations: the dependency taxonomy
 
 This is the most transferable idea in the project.
 
@@ -450,7 +448,7 @@ deliberately. The *seam* is built instead — each new provider is one file.
 
 ---
 
-## 11. Observability — making silence loud
+## 10. Observability — making silence loud
 
 The Reddit incident's real lesson wasn't about Reddit. It was that
 **graceful degradation without a failure rate hides outages indefinitely.**
@@ -475,7 +473,7 @@ User IDs are hashed. Anonymous session IDs are identity too.
 
 ---
 
-## 12. What failure taught us
+## 11. What failure taught us
 
 This is the section worth reading twice. Five separate bugs, one shape.
 
@@ -558,9 +556,9 @@ header it sends is allowed — a test that *crosses* the boundary.
 
 ---
 
-## 13. How this codebase is tested
+## 12. How this codebase is tested
 
-**400+ tests, 5,792 lines — roughly one line of test per line of source.**
+**400+ tests, 5,792 lines roughly one line of test per line of source.**
 
 Four principles, each learned from a failure above:
 
@@ -589,7 +587,7 @@ test_an_expired_refresh_token_is_an_auth_error
 
 ---
 
-## 14. What's genuinely unique here
+## 13. What's unique
 
 Ordered by how hard they'd be to copy.
 
@@ -624,7 +622,7 @@ Ordered by how hard they'd be to copy.
 
 ---
 
-## 15. Tradeoffs we made, stated plainly
+## 14. Tradeoffs I made, stated plainly
 
 | Decision | What we gained | What it cost |
 |---|---|---|
@@ -641,7 +639,7 @@ Ordered by how hard they'd be to copy.
 
 ---
 
-## 16. Current status
+## 15. Current status
 
 ```
 Backend         5,883 lines    Frontend      2,993 lines
@@ -674,8 +672,6 @@ matters.
 
 ---
 
-## 17. If someone asks you...
-
 **"What's actually hard about this?"**
 Not the chat. The hard parts are: making a forecast that's honest about its
 own uncertainty, making human approval structurally impossible to bypass,
@@ -694,7 +690,7 @@ click. It's not a rule the model follows — it's a path that doesn't exist.
 
 **"What happens when an external API dies?"**
 We've learned that answer the hard way. Every tool reports failure the same
-way, every failure is counted, and the failure *rate* is alerted on — because
+way, every failure is counted, and the failure *rate* is alerted on because
 a tool that fails politely is indistinguishable from one that's working
 until you measure it.
 
@@ -704,7 +700,7 @@ which is the honest answer with no wearable connected. Connect Fitbit and it
 becomes yours. Whether it's *right* is unfalsifiable day to day, which is
 exactly why confidence is displayed as prominently as the curve.
 
-**"What would you do differently?"**
+**"What I would do differently?"**
 Run the frontend build before pushing. Write the boundary-crossing test
 first instead of after the fifth incident. And treat "the test passes" as a
 claim to verify rather than a fact.
