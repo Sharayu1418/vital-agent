@@ -2,7 +2,7 @@
 
 ## 1. What VITAL is
 
-VITAL is an **energy copilot**. You talk to it in plain language — "I slept
+VITAL is an **energy copilot**. You talk to it in plain language "I slept
 badly, what should I do today?" and it routes you to the right specialist,
 remembers durable facts about you, predicts when you'll actually have energy,
 and turns all of that into a concrete schedule that you approve before
