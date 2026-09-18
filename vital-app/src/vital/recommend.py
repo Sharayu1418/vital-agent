@@ -79,7 +79,14 @@ def find_activities(query: str, *, user_id: str, predicted_energy: float,
         # No coordinates: fall back to the text search, which cannot be
         # ranked by distance. Degraded, and says so, rather than inventing
         # a location to rank against.
-        found = search_places.func(query=query, city=city or "nearby",
+        #
+        # This used to pass `city or "nearby"`, which contradicted the line
+        # above: "nearby" is not a place, so the text query became
+        # "<query> in nearby" and Places ran an unbiased global search whose
+        # results were then presented in the ordinary way. Passing None lets
+        # search_places report that it has no location, which is the true
+        # state and the one that gets the user asked.
+        found = search_places.func(query=query, city=city or None,
                                    max_results=8)
         if "error" in found:
             return found

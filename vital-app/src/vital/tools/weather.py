@@ -11,6 +11,7 @@ from langchain_core.tools import tool
 from pydantic import BaseModel
 
 from vital.config import settings
+from vital.tools import where as where_mod
 
 _BASE = "https://api.openweathermap.org/data/2.5"
 
@@ -25,8 +26,13 @@ class WeatherReport(BaseModel):
 
 
 @tool
-def get_weather(city: str) -> dict:
-    """Get current weather and 12-hour precipitation outlook for a city.
+def get_weather(city: str | None = None) -> dict:
+    """Get current weather and 12-hour precipitation outlook.
+
+    OMIT `city` for the user's own location — the server already holds their
+    exact coordinates from their device and will use them, which is more
+    accurate than any name you could pass. Pass `city` ONLY when they ask
+    about a different place ('what's it like in Tokyo?').
 
     ALWAYS call this before recommending any outdoor activity.
     `outdoor_friendly` is a pre-computed hint: false means prefer indoor options.
@@ -34,22 +40,40 @@ def get_weather(city: str) -> dict:
     the user so, and prefer weather-safe (indoor) recommendations.
     """
     cfg = settings()
+    place = where_mod.resolve(city)
+    if not place.known:
+        # Deliberately not a guess. `city` used to be required, so the model
+        # always supplied SOMETHING — sometimes a city inferred from an old
+        # message. A confident answer about the wrong place is worse input to
+        # the next turn than an admission.
+        return {"error": "no location available — ask the user where they are",
+                "city": None}
+
+    # lat/lon when we have a point, q= only when all we have is a name.
+    # OpenWeather's q= resolves to a city centroid, so sending a name while
+    # holding coordinates throws away most of the precision the device gave us.
+    locator = ({"lat": place.lat, "lon": place.lng} if place.precise
+               else {"q": place.name})
+    common = {"appid": cfg.openweather_api_key, "units": "metric", **locator}
+
     try:
         with httpx.Client(timeout=cfg.tool_timeout_seconds) as client:
             now = client.get(
-                f"{_BASE}/weather",
-                params={"q": city, "appid": cfg.openweather_api_key, "units": "metric"},
+                f"{_BASE}/weather", params=common,
             ).raise_for_status().json()
 
             forecast = client.get(
-                f"{_BASE}/forecast",
-                params={"q": city, "appid": cfg.openweather_api_key, "units": "metric", "cnt": 4},
+                f"{_BASE}/forecast", params={**common, "cnt": 4},
             ).raise_for_status().json()
 
         precip = max((slot.get("pop", 0.0) for slot in forecast.get("list", [])), default=0.0)
         temp = now["main"]["temp"]
         report = WeatherReport(
-            city=city,
+            # What the PROVIDER resolved, not what we sent. Asked by
+            # coordinate it answers with the neighbourhood, which is more
+            # specific than our own label — and if the two ever disagree,
+            # the reply should name the place actually measured.
+            city=str(now.get("name") or place.name or "your location"),
             temp_c=temp,
             feels_like_c=now["main"]["feels_like"],
             condition=now["weather"][0]["description"],
@@ -59,4 +83,5 @@ def get_weather(city: str) -> dict:
         return report.model_dump()
     except (httpx.HTTPError, KeyError, IndexError, ValueError) as exc:
         # Log server-side; give the model a clean, non-crashing signal
-        return {"error": f"live weather unavailable ({type(exc).__name__})", "city": city}
+        return {"error": f"live weather unavailable ({type(exc).__name__})",
+                "city": place.name}

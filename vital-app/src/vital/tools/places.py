@@ -8,8 +8,13 @@ from langchain_core.tools import tool
 from pydantic import BaseModel
 
 from vital.config import settings
+from vital.tools import where
 
 _URL = "https://places.googleapis.com/v1/places:searchText"
+
+# Matches what recommend.py asks for. Wide enough that a good venue one
+# neighbourhood over still appears, narrow enough to mean "near you".
+DEFAULT_RADIUS_KM = 10.0
 
 
 class Venue(BaseModel):
@@ -92,8 +97,12 @@ def search_near(query: str, lat: float, lng: float, radius_km: float = 10.0,
 
 
 @tool
-def search_places(query: str, city: str, max_results: int = 5) -> dict:
+def search_places(query: str, city: str | None = None, max_results: int = 5) -> dict:
     """Search for real venues and activity spots.
+
+    OMIT `city` to search around the user — the server holds their exact
+    coordinates and biases the search there, which beats a city name by
+    kilometres. Pass `city` ONLY for somewhere else they asked about.
 
     Use specific activity queries, not generic ones:
     GOOD: 'bouldering gym', 'pottery class', 'hiking trail', 'board game cafe'
@@ -106,6 +115,26 @@ def search_places(query: str, city: str, max_results: int = 5) -> dict:
     and give best-effort general suggestions clearly marked as unverified.
     """
     cfg = settings()
+    place = where.resolve(city)
+    if not place.known:
+        # An unbiased global text search for "bouldering gym" returns a gym in
+        # another hemisphere, rendered exactly like a good answer. There is no
+        # safe default here, so there is no default.
+        return {"error": "no location available — ask the user where they are",
+                "query": query}
+
+    if place.precise:
+        # A bias rather than "<query> in <name>": the point is ~11 m accurate
+        # and a city name is a centroid. Same mechanism search_near already
+        # used for the buddy meeting-point document.
+        body = {"textQuery": query, "maxResultCount": max_results,
+                "locationBias": {"circle": {
+                    "center": {"latitude": place.lat, "longitude": place.lng},
+                    "radius": DEFAULT_RADIUS_KM * 1000}}}
+    else:
+        body = {"textQuery": f"{query} in {place.name}",
+                "maxResultCount": max_results}
+
     try:
         resp = httpx.post(
             _URL,
@@ -117,7 +146,7 @@ def search_places(query: str, city: str, max_results: int = 5) -> dict:
                     "places.googleMapsUri", "places.priceLevel",
                 ]),
             },
-            json={"textQuery": f"{query} in {city}", "maxResultCount": max_results},
+            json=body,
         ).raise_for_status().json()
 
         venues = [
