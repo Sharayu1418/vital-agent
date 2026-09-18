@@ -28,8 +28,37 @@ make the app improve as you use it.
 metrics in `test_retrieval_quality.py`, both under `vital-app/tests/`.
 Building it found three separate bugs in memory that had nothing to do with
 retrieval quality — see "What building the measuring stick actually found"
-below. The recall and MRR numbers themselves are still unread, because the
-eval needs live credentials to run.
+below.
+
+**The numbers, finally measured.** 15 queries against 17 facts, live
+embeddings:
+
+    recall@1  80%      (gate 50%)
+    recall@3  93%
+    recall@5  93%      (gate 80%)
+    MRR       0.87     (gate 0.60)
+
+Comfortably past every gate, and the gates stay where they are — they exist
+to catch a regression, not to be re-tightened to whatever today happens to
+score.
+
+Two things worth reading off that table.
+
+**recall@3 equals recall@5.** Positions four and five never contributed a
+single correct fact. `memory_recall_limit` is 5, so every turn injects two
+facts the measurement says do nothing, in a prompt that pays for them. Worth
+dropping to 3 — but on 15 queries that is evidence, not proof, so widen the
+set before acting on it. A change this cheap to make is exactly the kind that
+gets made on too little data.
+
+**The one complete miss is honest.** "can I go away for the weekend?" should
+find "User has a dog called Mabel" and instead returns the partner, the car
+and rock climbing. Nothing about those two sentences is similar; the link is
+that pets need looking after, which is world knowledge rather than semantic
+proximity. No threshold or embedding model fixes that — it needs the agent to
+reason about consequences, not the retriever to try harder. Left in the set
+deliberately: a labelled case that retrieval genuinely cannot satisfy is more
+useful than one quietly deleted for spoiling the score.
 
 **Memory had three real bugs, all found by one failing number.** Dedup was
 chaining, failed writes were silent, and `all_memories` was returning ten
